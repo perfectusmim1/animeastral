@@ -18,7 +18,6 @@ local currentJobId = game.JobId
 local COOLDOWN_TIME = 1800
 local HISTORY_FILE = "BallHopHistory.json"
 local MAX_RETRY = 3
-local FILE_NAME = "ball.lua"
 
 local queueTeleport = queue_on_teleport or (syn and syn.queue_on_teleport)
 if not isfile or not readfile or not writefile then
