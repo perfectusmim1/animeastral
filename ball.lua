@@ -229,7 +229,7 @@ local function serverHop()
                     if queueTeleport then
                         queueTeleport([[
                             repeat task.wait() until game:IsLoaded()
-                            loadstring(game:HttpGet("BURAYA_URL_EKLE"))()
+                            loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/ball.lua"))()
                         ]])
                     end
 
