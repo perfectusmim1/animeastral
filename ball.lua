@@ -314,7 +314,9 @@ local function collectBall(ballObject)
 
     if not targetCFrame then return false end
 
-    rootPart.CFrame = targetCFrame + Vector3.new(0, 2, 0)
+    -- Topun 5 stud önüne + 3 stud yukarısına TP at (topun içine girmemek için)
+    local offset = targetCFrame.LookVector * 5 + Vector3.new(0, 3, 0)
+    rootPart.CFrame = targetCFrame + offset
     rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
     rootPart.Anchored = true
 
@@ -323,6 +325,7 @@ local function collectBall(ballObject)
 
     local collected = false
 
+    -- Sadece 1 kez TP attık, şimdi prompt'u fire etmeyi dene (tekrar TP yok)
     for attempt = 1, MAX_RETRY do
         if not ballObject.Parent then
             collected = true
@@ -333,7 +336,7 @@ local function collectBall(ballObject)
             status = string.format("Collecting (%d/%d)", attempt, MAX_RETRY),
             current = ballObject.Name,
         })
-        task.wait(0.2)
+        task.wait(0.3)
 
         pcall(function()
             if fireproximityprompt then
@@ -346,8 +349,9 @@ local function collectBall(ballObject)
             end
         end)
 
+        -- Topun alınmasını bekle
         local startTime = tick()
-        while ballObject.Parent and tick() - startTime < 0.5 do
+        while ballObject.Parent and tick() - startTime < 1 do
             task.wait(0.1)
         end
 
