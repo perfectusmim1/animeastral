@@ -1,0 +1,418 @@
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
+local LocalPlayer = Players.LocalPlayer
+
+local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/dist/main.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "Anime Astral",
+    SubTitle = "Perfectus",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(500, 300),
+    Acrylic = false,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl,
+})
+
+local Tabs = {
+    Main = Window:AddTab({ Title = "Dungeon", Icon = "swords" }),
+}
+
+local AutoDungeonEnabled = false
+local AutoLeaveEnabled = false
+local LeaveRoom = 50
+
+Tabs.Main:AddToggle("AutoDungeon", {
+    Title = "Auto Dungeon",
+    Default = false,
+    Callback = function(state)
+        AutoDungeonEnabled = state
+    end
+})
+
+Tabs.Main:AddToggle("AutoLeave", {
+    Title = "Auto Leave",
+    Default = false,
+    Callback = function(state)
+        AutoLeaveEnabled = state
+    end
+})
+
+Tabs.Main:AddSlider("LeaveRoom", {
+    Title = "Leave Room",
+    Min = 1,
+    Max = 50,
+    Default = 50,
+    Rounding = 0.1,
+    Callback = function(Value)
+        LeaveRoom = Value
+    end
+})
+
+local StatusLabel = Tabs.Main:AddParagraph({ Title = "Status", Content = "Idle" })
+
+local function setStatus(text)
+    if StatusLabel then
+        pcall(function() StatusLabel:SetDesc(text) end)
+    end
+end
+
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getRootPart()
+    local char = getCharacter()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(model)
+    if not model then return nil end
+    return model:FindFirstChildOfClass("Humanoid") or model:FindFirstChild("Humanoid", true)
+end
+
+local function getObjectCFrame(obj)
+    if not obj then return nil end
+    if obj:IsA("Model") then
+        local ok, pivot = pcall(function() return obj:GetPivot() end)
+        if ok then return pivot end
+    end
+    if obj:IsA("BasePart") then return obj.CFrame end
+    local part = obj:FindFirstChild("HumanoidRootPart", true) or obj:FindFirstChildWhichIsA("BasePart", true)
+    if part then return part.CFrame end
+    return nil
+end
+
+local function isEnemyAlive(enemy)
+    if not enemy or not enemy.Parent then return false end
+    local dead = enemy:GetAttribute("EnemyDead")
+    if dead == true then return false end
+    local healthReal = enemy:GetAttribute("HealthReal")
+    if type(healthReal) == "number" and healthReal <= 0 then return false end
+    local hum = getHumanoid(enemy)
+    if hum and hum.Health <= 0 then return false end
+    return true
+end
+
+local function getPartRadius(part)
+    if not part or not part:IsA("BasePart") then return nil end
+    local sizes = {part.Size.X, part.Size.Y, part.Size.Z}
+    table.sort(sizes)
+    return sizes[3] / 2
+end
+
+local function getPlayerRange()
+    local ok, radius = pcall(function()
+        local range = workspace:FindFirstChild("RangeLv1")
+        if not range then return 15 end
+        local main = range:FindFirstChild("Main")
+        if main then
+            local circle = main:FindFirstChild("Circle")
+            local r = getPartRadius(circle) or getPartRadius(main)
+            if r then return r end
+        end
+        local r = getPartRadius(range:FindFirstChild("HitBox"))
+        if r then return r end
+        return 15
+    end)
+    return (ok and radius) or 15
+end
+
+local function robustClickObject(obj)
+    if not obj then return false end
+    if typeof(fireclick) == "function" then
+        if pcall(fireclick, obj) then return true end
+    end
+    if typeof(firesignal) == "function" then
+        local clicked = false
+        pcall(function() firesignal(obj.MouseButton1Click); clicked = true end)
+        pcall(function() firesignal(obj.Activated); clicked = true end)
+        if clicked then return true end
+    end
+    if typeof(getconnections) == "function" then
+        local fired = false
+        pcall(function()
+            for _, conn in ipairs(getconnections(obj.MouseButton1Click)) do conn:Fire(); fired = true end
+            for _, conn in ipairs(getconnections(obj.Activated)) do conn:Fire(); fired = true end
+        end)
+        if fired then return true end
+    end
+    local vimSuccess = pcall(function()
+        if obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0 then
+            local inset = GuiService:GetGuiInset()
+            local x = obj.AbsolutePosition.X + (obj.AbsoluteSize.X / 2)
+            local y = obj.AbsolutePosition.Y + (obj.AbsoluteSize.Y / 2) + inset.Y
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+            task.wait(0.02)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        end
+    end)
+    if vimSuccess then return true end
+    if pcall(function() obj:Activate() end) then return true end
+    return false
+end
+
+local function MovementGoTo(targetCFrame)
+    local root = getRootPart()
+    if not root then return false end
+    pcall(function()
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.CFrame = targetCFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function optimalFarmPosition(enemies)
+    local positions3D = {}
+    for _, e in ipairs(enemies) do
+        local cf = getObjectCFrame(e)
+        if cf then table.insert(positions3D, cf.Position) end
+    end
+    if #positions3D == 0 then return nil, 0 end
+    if #positions3D == 1 then
+        return CFrame.new(positions3D[1] + Vector3.new(0, 3, 0)), 1
+    end
+
+    local range = getPlayerRange()
+
+    local centroid = Vector3.zero
+    for _, p in ipairs(positions3D) do centroid += p end
+    centroid /= #positions3D
+
+    local allFit = true
+    for _, p in ipairs(positions3D) do
+        local dist = (Vector2.new(p.X, p.Z) - Vector2.new(centroid.X, centroid.Z)).Magnitude
+        if dist > range * 0.95 then
+            allFit = false
+            break
+        end
+    end
+    if allFit then
+        return CFrame.new(centroid + Vector3.new(0, 3, 0)), #positions3D
+    end
+
+    local candidates = {}
+    for _, p in ipairs(positions3D) do table.insert(candidates, p) end
+    for i = 1, #positions3D do
+        for j = i + 1, #positions3D do
+            table.insert(candidates, (positions3D[i] + positions3D[j]) / 2)
+        end
+    end
+    table.insert(candidates, centroid)
+
+    local bestPos = candidates[1]
+    local bestCount = 0
+
+    for _, candidate in ipairs(candidates) do
+        local count = 0
+        for _, p in ipairs(positions3D) do
+            local dist = (Vector2.new(p.X, p.Z) - Vector2.new(candidate.X, candidate.Z)).Magnitude
+            if dist <= range * 0.95 then
+                count = count + 1
+            end
+        end
+        if count > bestCount then
+            bestCount = count
+            bestPos = candidate
+        elseif count == bestCount then
+            if (candidate - centroid).Magnitude < (bestPos - centroid).Magnitude then
+                bestPos = candidate
+            end
+        end
+    end
+
+    local clusterCenter = Vector3.zero
+    local clusterCount = 0
+    for _, p in ipairs(positions3D) do
+        local dist = (Vector2.new(p.X, p.Z) - Vector2.new(bestPos.X, bestPos.Z)).Magnitude
+        if dist <= range * 0.95 then
+            clusterCenter += p
+            clusterCount = clusterCount + 1
+        end
+    end
+
+    if clusterCount > 0 then
+        clusterCenter /= clusterCount
+        return CFrame.new(clusterCenter + Vector3.new(0, 3, 0)), clusterCount
+    else
+        return CFrame.new(bestPos + Vector3.new(0, 3, 0)), 1
+    end
+end
+
+local lastEmptyTime = tick()
+
+task.spawn(function()
+    while task.wait(0.03) do
+        if not AutoDungeonEnabled then 
+            setStatus("Waiting (Disabled)")
+            continue 
+        end
+        
+        pcall(function()
+            local notifyGui = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            if notifyGui then
+                local notifyDungeon = notifyGui:FindFirstChild("Main")
+                    and notifyGui.Main:FindFirstChild("GamemodeNotify")
+                    and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
+                
+                if notifyDungeon and notifyDungeon.Visible then
+                    local yesBtn = notifyDungeon:FindFirstChild("Actions") and notifyDungeon.Actions:FindFirstChild("YES")
+                    if yesBtn then
+                        setStatus("Dungeon notification detected, waiting 0.5s...")
+                        task.wait(0.5)
+                        setStatus("Clicking YES...")
+                        robustClickObject(yesBtn)
+                        
+                        local tl
+                        pcall(function()
+                            local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                            tl = tlGui and tlGui:FindFirstChild("TeleportLoading")
+                        end)
+                        
+                        local waitStart = tick()
+                        while tl and not tl.Visible and (tick() - waitStart < 4) do
+                            task.wait(0.05)
+                        end
+                        
+                        if tl and tl.Visible then
+                            setStatus("Waiting for loading screen...")
+                            repeat task.wait(0.05) until not tl.Visible
+                        end
+                        
+                        setStatus("Loading complete, waiting 1s...")
+                        task.wait(1)
+                    end
+                end
+            end
+        end)
+
+        local currentRoom = 0
+        pcall(function()
+            local roomLabel = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
+                and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Room")
+            if roomLabel and roomLabel:IsA("TextLabel") then
+                currentRoom = tonumber(roomLabel.Text:match("(%d+)")) or 0
+            end
+        end)
+
+        local inDungeon = false
+        local dungeonEnemiesFolder = nil
+        
+        pcall(function()
+            local dungeonArenas = workspace:FindFirstChild("DungeonArenas")
+            if dungeonArenas then
+                local w9 = dungeonArenas:FindFirstChild("World9Dungeon")
+                local enemies = w9 and w9:FindFirstChild("Enemies")
+                if enemies then
+                    inDungeon = true
+                    dungeonEnemiesFolder = enemies
+                else
+                    for _, arena in ipairs(dungeonArenas:GetChildren()) do
+                        local enemiesFolder = arena:FindFirstChild("Enemies")
+                        if enemiesFolder then
+                            inDungeon = true
+                            dungeonEnemiesFolder = enemiesFolder
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+
+        if inDungeon and dungeonEnemiesFolder then
+            -- Loading kontrolü
+            local teleportLoading
+            pcall(function()
+                local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                if tl then teleportLoading = tl:FindFirstChild("TeleportLoading") end
+            end)
+            
+            if teleportLoading and teleportLoading.Visible then
+                setStatus("Waiting for loading screen...")
+                repeat task.wait(0.05) until not teleportLoading.Visible
+                task.wait(1)
+            end
+
+            if AutoLeaveEnabled and currentRoom >= LeaveRoom and currentRoom > 0 then
+                setStatus("Target Room Reached (Room " .. currentRoom .. "). Leaving...")
+                pcall(function()
+                    local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                        and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
+                        and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Leave")
+                        
+                    if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
+                        robustClickObject(leaveBtn)
+                        task.wait(0.3)
+                    end
+                end)
+                continue
+            end
+
+            local targets = {}
+            for _, enemy in ipairs(dungeonEnemiesFolder:GetChildren()) do
+                if isEnemyAlive(enemy) then
+                    table.insert(targets, enemy)
+                end
+            end
+
+            if #targets > 0 then
+                lastEmptyTime = tick()
+                local tcf, coveredCount = optimalFarmPosition(targets)
+                if tcf then
+                    local range = getPlayerRange()
+                    local roomText = currentRoom > 0 and ("[Room " .. currentRoom .. "] ") or ""
+                    setStatus(roomText .. "Farming (Perfect Position: " .. coveredCount .. "/" .. #targets .. " enemies)")
+                    MovementGoTo(tcf)
+                    
+                    local startTime = tick()
+                    while tick() - startTime < 3 and AutoDungeonEnabled do
+                        local anyCoveredAlive = false
+                        for _, enemy in ipairs(targets) do
+                            if isEnemyAlive(enemy) then
+                                local ecf = getObjectCFrame(enemy)
+                                if ecf then
+                                    local dist = (Vector2.new(ecf.Position.X, ecf.Position.Z) - Vector2.new(tcf.Position.X, tcf.Position.Z)).Magnitude
+                                    if dist <= range * 0.95 then
+                                        anyCoveredAlive = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        if not anyCoveredAlive then break end
+                        task.wait(0.03)
+                    end
+                end
+            else
+                setStatus("Waiting for enemies or dungeon finished...")
+                
+                if AutoLeaveEnabled and (tick() - lastEmptyTime > 4) then
+                    pcall(function()
+                        local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                            and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
+                            and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Leave")
+                            
+                        if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
+                            setStatus("Leaving Dungeon (Auto Leave)...")
+                            robustClickObject(leaveBtn)
+                            task.wait(0.3)
+                        end
+                    end)
+                end
+            end
+        else
+            if AutoDungeonEnabled then
+                setStatus("Waiting for Dungeon invite...")
+            end
+        end
+    end
+end)
+
+Window:SelectTab(1)
+Fluent:Notify({ Title = "Auto Dungeon", Content = "Script loaded successfully!", Duration = 3 })
