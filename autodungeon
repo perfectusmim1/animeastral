@@ -245,6 +245,7 @@ local function optimalFarmPosition(enemies)
 end
 
 local lastEmptyTime = tick()
+local hasLeftDungeon = false
 
 task.spawn(function()
     while task.wait(0.03) do
@@ -267,6 +268,7 @@ task.spawn(function()
                         task.wait(0.5)
                         setStatus("Clicking YES...")
                         robustClickObject(yesBtn)
+                        hasLeftDungeon = false
                         
                         local tl
                         pcall(function()
@@ -325,7 +327,16 @@ task.spawn(function()
             end
         end)
 
+        if not inDungeon then
+            hasLeftDungeon = false
+        end
+
         if inDungeon and dungeonEnemiesFolder then
+            if hasLeftDungeon then
+                setStatus("Waiting for next dungeon (already left)...")
+                continue
+            end
+
             -- Loading kontrolü
             local teleportLoading
             pcall(function()
@@ -348,6 +359,7 @@ task.spawn(function()
                         
                     if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
                         robustClickObject(leaveBtn)
+                        hasLeftDungeon = true
                         task.wait(0.3)
                     end
                 end)
@@ -401,6 +413,7 @@ task.spawn(function()
                         if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
                             setStatus("Leaving Dungeon (Auto Leave)...")
                             robustClickObject(leaveBtn)
+                            hasLeftDungeon = true
                             task.wait(0.3)
                         end
                     end)
