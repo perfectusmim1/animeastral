@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Safety gate: wait until the game is fully loaded.
 -- =========================================================================
-repeat task.wait(6) until game:IsLoaded()
+repeat task.wait() until game:IsLoaded()
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
@@ -17,7 +17,7 @@ local placeId = game.PlaceId
 local currentJobId = game.JobId
 local COOLDOWN_TIME = 1800
 local HISTORY_FILE = "BallHopHistory.json"
-local MAX_RETRY = 5
+local MAX_RETRY = 3
 
 local queueTeleport = queue_on_teleport or (syn and syn.queue_on_teleport)
 if not isfile or not readfile or not writefile then
@@ -137,24 +137,31 @@ createStatusInterface()
 updateStatusInterface()
 
 -- =============================================
--- Step 1: Remove the TeleportLoading screen.
+-- Step 1: Wait for TeleportLoading to close
 -- =============================================
-local function destroyTeleportLoading()
+local function waitForTeleportLoading()
+    local teleportLoading
     pcall(function()
-        local windows = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+        local windows = LocalPlayer.PlayerGui:WaitForChild("Windows", 5)
         if windows then
-            local frame = windows:FindFirstChild("TeleportLoading")
-            if frame then frame:Destroy() end
+            teleportLoading = windows:FindFirstChild("TeleportLoading")
         end
     end)
-end
-destroyTeleportLoading()
 
-LocalPlayer.PlayerGui.DescendantAdded:Connect(function(obj)
-    if obj.Name == "TeleportLoading" then
-        task.defer(function() pcall(function() obj:Destroy() end) end)
+    if teleportLoading then
+        local waitStart = tick()
+        while not teleportLoading.Visible and teleportLoading.Parent and (tick() - waitStart < 3) do
+            task.wait(0.05)
+        end
+        if teleportLoading.Visible and teleportLoading.Parent then
+            while teleportLoading.Visible and teleportLoading.Parent do
+                task.wait(0.05)
+            end
+        end
     end
-end)
+    task.wait(1)
+end
+waitForTeleportLoading()
 
 -- =============================================
 -- Step 2: Server history management
@@ -318,7 +325,6 @@ local function collectBall(ballObject)
     local offset = targetCFrame.LookVector * 5 + Vector3.new(0, 3, 0)
     rootPart.CFrame = targetCFrame + offset
     rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-    rootPart.Anchored = true
 
     prompt.RequiresLineOfSight = false
     prompt.MaxActivationDistance = 50
@@ -365,7 +371,6 @@ local function collectBall(ballObject)
         end
     end
 
-    rootPart.Anchored = false
     return collected
 end
 
