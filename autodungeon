@@ -3,10 +3,14 @@ repeat task.wait() until game:IsLoaded()
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local GuiService = game:GetService("GuiService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/dist/main.lua"))()
-
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/Addons/InterfaceManager.lua"))()
 local Window = Fluent:CreateWindow({
     Title = "Anime Astral",
     SubTitle = "Perfectus",
@@ -19,7 +23,12 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab({ Title = "Dungeon", Icon = "swords" }),
+    Gate = Window:AddTab({ Title = "Gate", Icon = "key" }),
+    Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
 }
+
+local Options = Fluent.Options
 
 local AutoDungeonEnabled = false
 local AutoLeaveEnabled = false
@@ -57,6 +66,79 @@ local StatusLabel = Tabs.Main:AddParagraph({ Title = "Status", Content = "Idle" 
 local function setStatus(text)
     if StatusLabel then
         pcall(function() StatusLabel:SetDesc(text) end)
+    end
+end
+
+local function selectedMultiValues(value)
+    local selected = {}
+    local seen = {}
+    if type(value) ~= "table" then return selected end
+    for k, v in pairs(value) do
+        local val = nil
+        if type(v) == "string" then
+            val = v
+        elseif type(k) == "string" and v == true then
+            val = k
+        end
+        if val and not seen[val] then
+            seen[val] = true
+            table.insert(selected, val)
+        end
+    end
+    table.sort(selected)
+    return selected
+end
+
+local GATE_RANK_VALUES = { "E", "D", "C", "B"}
+local AutoGateEnabled = false
+local AutoGateAriseEnabled = false
+local AutoLeaveGateEnabled = false
+local LeaveGateWave = 50
+
+Tabs.Gate:AddToggle("AutoGate", {
+    Title = "Auto Gate",
+    Default = false,
+    Callback = function(state) AutoGateEnabled = state end
+})
+
+Tabs.Gate:AddDropdown("GateRanks", {
+    Title = "Select Ranks",
+    Values = GATE_RANK_VALUES,
+    Multi = true,
+    Default = {},
+})
+
+Tabs.Gate:AddToggle("GateAutoArise", {
+    Title = "Auto Arise",
+    Default = false,
+    Callback = function(state)
+        AutoGateAriseEnabled = state
+        if state then
+            arisingPromptTarget = nil
+        end
+    end
+})
+
+Tabs.Gate:AddToggle("AutoLeaveGate", {
+    Title = "Auto Leave Gate",
+    Default = false,
+    Callback = function(state) AutoLeaveGateEnabled = state end
+})
+
+Tabs.Gate:AddSlider("LeaveGateWave", {
+    Title = "Leave Wave",
+    Min = 1,
+    Max = 50,
+    Default = 50,
+    Rounding = 0.1,
+    Callback = function(Value) LeaveGateWave = Value end
+})
+
+local GateStatusLabel = Tabs.Gate:AddParagraph({ Title = "Status", Content = "Idle" })
+
+local function setGateStatus(text)
+    if GateStatusLabel then
+        pcall(function() GateStatusLabel:SetDesc(text) end)
     end
 end
 
@@ -244,16 +326,218 @@ local function optimalFarmPosition(enemies)
     end
 end
 
-local lastEmptyTime = tick()
+local lastDungeonEmptyTime = tick()
+local lastGateEmptyTime = tick()
 local hasLeftDungeon = false
+local hasLeftGate = false
+local gateEntryTime = nil
+local dungeonEntryTime = nil
+local arisingPromptTarget = nil
 
 task.spawn(function()
     while task.wait(0.03) do
-        if not AutoDungeonEnabled then 
+        local isAutoDungeonEnabled = (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
+        local isAutoGateEnabled = (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
+        local isAutoLeaveEnabled = (Options.AutoLeave and Options.AutoLeave.Value ~= nil) and Options.AutoLeave.Value or AutoLeaveEnabled
+        local isAutoLeaveGateEnabled = (Options.AutoLeaveGate and Options.AutoLeaveGate.Value ~= nil) and Options.AutoLeaveGate.Value or AutoLeaveGateEnabled
+        local isAutoGateAriseEnabled = (Options.GateAutoArise and Options.GateAutoArise.Value ~= nil) and Options.GateAutoArise.Value or AutoGateAriseEnabled
+        local targetLeaveRoom = tonumber(Options.LeaveRoom and Options.LeaveRoom.Value) or tonumber(LeaveRoom) or 50
+        local targetLeaveGateWave = tonumber(Options.LeaveGateWave and Options.LeaveGateWave.Value) or tonumber(LeaveGateWave) or 50
+
+        if not isAutoDungeonEnabled and not isAutoGateEnabled then 
             setStatus("Waiting (Disabled)")
+            setGateStatus("Waiting (Disabled)")
             continue 
         end
         
+        -- ENVIRONMENT DETECTION
+        local inDungeon = false
+        local dungeonEnemiesFolder = nil
+        pcall(function()
+            local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+            if visibility and string.find(visibility, "^Dungeon:") then
+                inDungeon = true
+                local dungeonArenas = workspace:FindFirstChild("DungeonArenas")
+                if dungeonArenas then
+                    local worldName = visibility:match("^Dungeon:(.+)")
+                    if worldName then
+                        local w = dungeonArenas:FindFirstChild(worldName)
+                        local enemies = w and w:FindFirstChild("Enemies")
+                        if enemies then
+                            dungeonEnemiesFolder = enemies
+                        end
+                    end
+                    if not dungeonEnemiesFolder then
+                        for _, arena in ipairs(dungeonArenas:GetChildren()) do
+                            local enemiesFolder = arena:FindFirstChild("Enemies")
+                            if enemiesFolder then
+                                dungeonEnemiesFolder = enemiesFolder
+                                break
+                            end
+                        end
+                    end
+                end
+            else
+                local dungeonGui = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                if dungeonGui and dungeonGui.Enabled then
+                    local mainFrame = dungeonGui:FindFirstChild("Main")
+                    if mainFrame and mainFrame.Visible then
+                        local dungeonArenas = workspace:FindFirstChild("DungeonArenas")
+                        if dungeonArenas then
+                            for _, arena in ipairs(dungeonArenas:GetChildren()) do
+                                local enemiesFolder = arena:FindFirstChild("Enemies")
+                                if enemiesFolder then
+                                    inDungeon = true
+                                    dungeonEnemiesFolder = enemiesFolder
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        local inGate = false
+        local gateEnemiesFolder = nil
+        pcall(function()
+            local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+            if visibility and string.find(visibility, "^Raid:") then
+                inGate = true
+                local raidArenas = workspace:FindFirstChild("RaidArenas")
+                if raidArenas then
+                    local worldName = visibility:match("^Raid:(.+)")
+                    if worldName then
+                        local w = raidArenas:FindFirstChild(worldName)
+                        local enemies = w and w:FindFirstChild("Enemies")
+                        if enemies then
+                            gateEnemiesFolder = enemies
+                        end
+                    end
+                    if not gateEnemiesFolder then
+                        for _, arena in ipairs(raidArenas:GetChildren()) do
+                            local enemiesFolder = arena:FindFirstChild("Enemies")
+                            if enemiesFolder then
+                                gateEnemiesFolder = enemiesFolder
+                                break
+                            end
+                        end
+                    end
+                end
+            else
+                local raidGui = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
+                if raidGui and raidGui.Enabled then
+                    local mainFrame = raidGui:FindFirstChild("Main")
+                    if mainFrame and mainFrame.Visible then
+                        local raidArenas = workspace:FindFirstChild("RaidArenas")
+                        if raidArenas then
+                            for _, arena in ipairs(raidArenas:GetChildren()) do
+                                if arena:FindFirstChild("Enemies") then
+                                    inGate = true
+                                    gateEnemiesFolder = arena.Enemies
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        -- Invite Notification Overrides
+        pcall(function()
+            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            local notifyDungeon = hud and hud:FindFirstChild("Main")
+                and hud.Main:FindFirstChild("GamemodeNotify")
+                and hud.Main.GamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
+            if notifyDungeon and notifyDungeon.Visible then
+                inDungeon = false
+            end
+        end)
+
+        pcall(function()
+            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            local notifyGate = hud and hud:FindFirstChild("Main")
+                and hud.Main:FindFirstChild("GamemodeNotify")
+                and hud.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
+            if notifyGate and notifyGate.Visible then
+                inGate = false
+            end
+        end)
+
+        local currentRoom = 0
+        pcall(function()
+            local roomLabel = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
+                and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Room")
+            if roomLabel and roomLabel:IsA("TextLabel") then
+                currentRoom = tonumber(roomLabel.Text:match("(%d+)")) or 0
+            end
+        end)
+
+        local currentGateWave = 0
+        pcall(function()
+            local waveLabel = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
+                and LocalPlayer.PlayerGui.RaidGui:FindFirstChild("Main")
+                and LocalPlayer.PlayerGui.RaidGui.Main:FindFirstChild("Wave")
+            if waveLabel and waveLabel:IsA("TextLabel") then
+                currentGateWave = tonumber(waveLabel.Text:match("(%d+)")) or 0
+            end
+        end)
+
+        if not inDungeon then 
+            hasLeftDungeon = false 
+            dungeonEntryTime = nil
+        else
+            if not dungeonEntryTime then
+                dungeonEntryTime = tick()
+                lastDungeonEmptyTime = tick()
+            end
+        end
+
+        if not inGate then 
+            hasLeftGate = false 
+            gateEntryTime = nil
+            arisingPromptTarget = nil
+        else
+            if not gateEntryTime then
+                gateEntryTime = tick()
+                lastGateEmptyTime = tick()
+                arisingPromptTarget = nil
+            end
+        end
+
+        if not isAutoDungeonEnabled then
+            lastDungeonEmptyTime = tick()
+        end
+        if not isAutoGateEnabled then
+            lastGateEmptyTime = tick()
+        end
+
+        -- CAN JOIN LOGIC
+        local canJoinDungeon = true
+        if inDungeon then
+            canJoinDungeon = false
+        elseif inGate then
+            if Options.LeaveForHigherPriority.Value then
+                canJoinDungeon = (tonumber(Options.DungeonPriority.Value) or 2) < (tonumber(Options.GatePriority.Value) or 1)
+            else
+                canJoinDungeon = false
+            end
+        end
+
+        local canJoinGate = true
+        if inGate then
+            canJoinGate = false
+        elseif inDungeon then
+            if Options.LeaveForHigherPriority.Value then
+                canJoinGate = (tonumber(Options.GatePriority.Value) or 1) < (tonumber(Options.DungeonPriority.Value) or 2)
+            else
+                canJoinGate = false
+            end
+        end
+
+        if isAutoDungeonEnabled and canJoinDungeon then
         pcall(function()
             local notifyGui = LocalPlayer.PlayerGui:FindFirstChild("HUD")
             if notifyGui then
@@ -292,46 +576,94 @@ task.spawn(function()
                 end
             end
         end)
+        end
 
-        local currentRoom = 0
-        pcall(function()
-            local roomLabel = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
-                and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
-                and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Room")
-            if roomLabel and roomLabel:IsA("TextLabel") then
-                currentRoom = tonumber(roomLabel.Text:match("(%d+)")) or 0
-            end
-        end)
+        if isAutoGateEnabled and canJoinGate then
+            pcall(function()
+                local notifyGui = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+                if notifyGui then
+                    local notifyGate = notifyGui:FindFirstChild("Main")
+                        and notifyGui.Main:FindFirstChild("GamemodeNotify")
+                        and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
+                    
+                    if notifyGate and notifyGate.Visible then
+                        local desc = notifyGate:FindFirstChild("Description")
+                        if desc and desc:IsA("TextLabel") then
+                            local text = desc.Text
+                            local rank = text:match("Rank ([%w]+) Gate")
+                            if rank then
+                                local selectedRanks = selectedMultiValues(Options.GateRanks.Value)
+                                local allowed = false
+                                if #selectedRanks == 0 then
+                                    allowed = false
+                                else
+                                    for _, r in ipairs(selectedRanks) do
+                                        if r == rank then allowed = true break end
+                                    end
+                                end
 
-        local inDungeon = false
-        local dungeonEnemiesFolder = nil
-        
-        pcall(function()
-            local dungeonArenas = workspace:FindFirstChild("DungeonArenas")
-            if dungeonArenas then
-                local w9 = dungeonArenas:FindFirstChild("World9Dungeon")
-                local enemies = w9 and w9:FindFirstChild("Enemies")
-                if enemies then
-                    inDungeon = true
-                    dungeonEnemiesFolder = enemies
-                else
-                    for _, arena in ipairs(dungeonArenas:GetChildren()) do
-                        local enemiesFolder = arena:FindFirstChild("Enemies")
-                        if enemiesFolder then
-                            inDungeon = true
-                            dungeonEnemiesFolder = enemiesFolder
-                            break
+                                if allowed then
+                                    local yesBtn = notifyGate:FindFirstChild("Actions") and notifyGate.Actions:FindFirstChild("YES")
+                                    if yesBtn then
+                                        setGateStatus("Gate " .. rank .. " detected, waiting 0.5s...")
+                                        task.wait(0.5)
+                                        setGateStatus("Clicking YES...")
+                                        robustClickObject(yesBtn)
+                                        hasLeftGate = false
+
+                                        -- Wait for TeleportLoading 1
+                                        local tl
+                                        pcall(function()
+                                            local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                                            tl = tlGui and tlGui:FindFirstChild("TeleportLoading")
+                                        end)
+                                        local waitStart = tick()
+                                        while tl and not tl.Visible and (tick() - waitStart < 4) do task.wait(0.05) end
+                                        if tl and tl.Visible then
+                                            setGateStatus("Waiting for loading screen 1...")
+                                            repeat task.wait(0.05) until not tl.Visible
+                                        end
+                                        task.wait(1)
+
+                                        -- Teleport to Portal2
+                                        pcall(function()
+                                            setGateStatus("Teleporting to Portal2...")
+                                            local portal = workspace:FindFirstChild("Worlds")
+                                                and workspace.Worlds:FindFirstChild("5")
+                                                and workspace.Worlds["5"]:FindFirstChild("Systems")
+                                                and workspace.Worlds["5"].Systems:FindFirstChild("RaidStation")
+                                                and workspace.Worlds["5"].Systems.RaidStation:FindFirstChild("ActiveGate")
+                                                and workspace.Worlds["5"].Systems.RaidStation.ActiveGate:FindFirstChild("Portal2")
+                                                
+                                            local root = getRootPart()
+                                            if portal and root then
+                                                root.CFrame = portal.CFrame
+                                            end
+                                        end)
+
+                                        -- Wait for TeleportLoading 2
+                                        local tl2
+                                        pcall(function()
+                                            local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                                            tl2 = tlGui and tlGui:FindFirstChild("TeleportLoading")
+                                        end)
+                                        local waitStart2 = tick()
+                                        while tl2 and not tl2.Visible and (tick() - waitStart2 < 4) do task.wait(0.05) end
+                                        if tl2 and tl2.Visible then
+                                            setGateStatus("Waiting for loading screen 2...")
+                                            repeat task.wait(0.05) until not tl2.Visible
+                                        end
+                                        task.wait(1)
+                                    end
+                                end
+                            end
                         end
                     end
                 end
-            end
-        end)
-
-        if not inDungeon then
-            hasLeftDungeon = false
+            end)
         end
 
-        if inDungeon and dungeonEnemiesFolder then
+        if isAutoDungeonEnabled and inDungeon and dungeonEnemiesFolder then
             if hasLeftDungeon then
                 setStatus("Waiting for next dungeon (already left)...")
                 continue
@@ -350,7 +682,8 @@ task.spawn(function()
                 task.wait(1)
             end
 
-            if AutoLeaveEnabled and currentRoom >= LeaveRoom and currentRoom > 0 then
+            if isAutoLeaveEnabled and currentRoom >= targetLeaveRoom and currentRoom > 0 then
+                warn("[AutoDungeon] Target Room Reached: currentRoom=" .. tostring(currentRoom) .. " targetLeaveRoom=" .. tostring(targetLeaveRoom))
                 setStatus("Target Room Reached (Room " .. currentRoom .. "). Leaving...")
                 pcall(function()
                     local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
@@ -374,7 +707,7 @@ task.spawn(function()
             end
 
             if #targets > 0 then
-                lastEmptyTime = tick()
+                lastDungeonEmptyTime = tick()
                 local tcf, coveredCount = optimalFarmPosition(targets)
                 if tcf then
                     local range = getPlayerRange()
@@ -383,7 +716,7 @@ task.spawn(function()
                     MovementGoTo(tcf)
                     
                     local startTime = tick()
-                    while tick() - startTime < 3 and AutoDungeonEnabled do
+                    while tick() - startTime < 3 and (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil and Options.AutoDungeon.Value or AutoDungeonEnabled) do
                         local anyCoveredAlive = false
                         for _, enemy in ipairs(targets) do
                             if isEnemyAlive(enemy) then
@@ -403,29 +736,249 @@ task.spawn(function()
                 end
             else
                 setStatus("Waiting for enemies or dungeon finished...")
-                
-                if AutoLeaveEnabled and (tick() - lastEmptyTime > 4) then
+            end
+        elseif isAutoDungeonEnabled then
+            setStatus("Waiting for Dungeon invite...")
+        end
+
+        if isAutoGateEnabled and inGate and gateEnemiesFolder then
+                if hasLeftGate then
+                    setGateStatus("Waiting for next Gate (already left)...")
+                else
+                    -- Loading kontrolü
+                    local teleportLoading
                     pcall(function()
-                        local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
-                            and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
-                            and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Leave")
-                            
-                        if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
-                            setStatus("Leaving Dungeon (Auto Leave)...")
-                            robustClickObject(leaveBtn)
-                            hasLeftDungeon = true
-                            task.wait(0.3)
-                        end
+                        local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                        if tl then teleportLoading = tl:FindFirstChild("TeleportLoading") end
                     end)
+                    if teleportLoading and teleportLoading.Visible then
+                        setGateStatus("Waiting for loading screen...")
+                        repeat task.wait(0.05) until not teleportLoading.Visible
+                        task.wait(1)
+                    end
+
+                    -- Auto Arise (Proximity Prompt)
+                    if isAutoGateAriseEnabled then
+                        pcall(function()
+                            if not arisingPromptTarget or not arisingPromptTarget.Parent or not arisingPromptTarget.Enabled then
+                                arisingPromptTarget = nil
+                                if gateEnemiesFolder then
+                                    for _, enemy in ipairs(gateEnemiesFolder:GetChildren()) do
+                                        local hrp = enemy:FindFirstChild("HumanoidRootPart")
+                                        if hrp then
+                                            local prompt = hrp:FindFirstChild("ArisePrompt")
+                                            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                                                arisingPromptTarget = prompt
+                                                task.spawn(function()
+                                                    local targetPrompt = arisingPromptTarget
+                                                    local root = getRootPart()
+                                                    if root then 
+                                                        root.CFrame = hrp.CFrame + Vector3.new(0, 3, 0)
+                                                    end
+                                                    
+                                                    while targetPrompt and targetPrompt.Parent and targetPrompt.Enabled do
+                                                        task.wait(0.1)
+                                                        if typeof(fireproximityprompt) == "function" then
+                                                            pcall(function() fireproximityprompt(targetPrompt, 1) end)
+                                                        else
+                                                            pcall(function()
+                                                                targetPrompt:InputHoldBegin()
+                                                                task.wait((targetPrompt.HoldDuration or 1) + 0.1)
+                                                                targetPrompt:InputHoldEnd()
+                                                            end)
+                                                        end
+                                                        task.wait(0.5)
+                                                    end
+                                                end)
+                                                break
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+                    end
+
+                    if isAutoLeaveGateEnabled and currentGateWave >= targetLeaveGateWave and currentGateWave > 0 then
+                        warn("[AutoGate] Target Wave Reached: currentGateWave=" .. tostring(currentGateWave) .. " targetLeaveGateWave=" .. tostring(targetLeaveGateWave))
+                        setGateStatus("Target Wave Reached (Wave " .. currentGateWave .. "). Leaving...")
+                        pcall(function()
+                            local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
+                                and LocalPlayer.PlayerGui.RaidGui:FindFirstChild("Main")
+                                and LocalPlayer.PlayerGui.RaidGui.Main:FindFirstChild("Leave")
+                                
+                            if leaveBtn and (leaveBtn.Visible or leaveBtn.Parent.Visible) then
+                                robustClickObject(leaveBtn)
+                                hasLeftGate = true
+                                task.wait(0.3)
+                            end
+                        end)
+                    else
+                        local targets = {}
+                        for _, enemy in ipairs(gateEnemiesFolder:GetChildren()) do
+                            if isEnemyAlive(enemy) then
+                                table.insert(targets, enemy)
+                            end
+                        end
+
+                        if #targets > 0 then
+                            lastGateEmptyTime = tick()
+                            local tcf, coveredCount = optimalFarmPosition(targets)
+                            if tcf then
+                                local range = getPlayerRange()
+                                local waveText = currentGateWave > 0 and ("[Wave " .. currentGateWave .. "] ") or ""
+                                setGateStatus(waveText .. "Farming (Perfect Position: " .. coveredCount .. "/" .. #targets .. " enemies)")
+                                MovementGoTo(tcf)
+                                
+                                local startTime = tick()
+                                while tick() - startTime < 3 and (Options.AutoGate and Options.AutoGate.Value ~= nil and Options.AutoGate.Value or AutoGateEnabled) do
+                                    local anyCoveredAlive = false
+                                    for _, enemy in ipairs(targets) do
+                                        if isEnemyAlive(enemy) then
+                                            local ecf = getObjectCFrame(enemy)
+                                            if ecf then
+                                                local dist = (Vector2.new(ecf.Position.X, ecf.Position.Z) - Vector2.new(tcf.Position.X, tcf.Position.Z)).Magnitude
+                                                if dist <= range * 0.95 then
+                                                    anyCoveredAlive = true
+                                                    break
+                                                end
+                                            end
+                                        end
+                                    end
+                                    if not anyCoveredAlive then break end
+                                    task.wait(0.03)
+                                end
+                            end
+                        else
+                            setGateStatus("Waiting for enemies or gate finished...")
+                        end
+                    end
                 end
-            end
-        else
-            if AutoDungeonEnabled then
-                setStatus("Waiting for Dungeon invite...")
-            end
+        elseif isAutoGateEnabled then
+            setGateStatus("Waiting for Gate invite...")
         end
     end
 end)
 
+local PRIORITY_VALUES = { "1", "2" }
+
+Tabs.Priority:AddDropdown("DungeonPriority", {
+    Title = "Dungeon",
+    Values = PRIORITY_VALUES,
+    Multi = false,
+    Default = "2",
+})
+
+Tabs.Priority:AddDropdown("GatePriority", {
+    Title = "Gate",
+    Values = PRIORITY_VALUES,
+    Multi = false,
+    Default = "1",
+})
+
+Tabs.Priority:AddToggle("LeaveForHigherPriority", {
+    Title = "Leave for Higher Priority",
+    Default = false,
+})
+
+Tabs.Settings:AddToggle("AutoExecuteOnTeleport", {
+    Title = "Auto Execute on Teleport",
+    Description = "Re-executes script automatically after teleporting.",
+    Default = false,
+})
+
+LocalPlayer.OnTeleport:Connect(function()
+    if Options.AutoExecuteOnTeleport.Value then
+        local queueTeleport = queue_on_teleport or (syn and syn.queue_on_teleport)
+        if queueTeleport then
+            queueTeleport('repeat task.wait() until game:IsLoaded() loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/autodungeon"))()')
+        end
+    end
+end)
+
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+InterfaceManager:SetFolder("AnimeAstral")
+SaveManager:SetFolder("AnimeAstral/Dungeon")
+
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+SaveManager:LoadAutoloadConfig()
+
 Window:SelectTab(1)
 Fluent:Notify({ Title = "Auto Dungeon", Content = "Script loaded successfully!", Duration = 3 })
+
+-- UI Toggle Button
+task.delay(2, function()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "AnimeToggle"
+    gui.ResetOnSpawn = false
+    gui.Parent = CoreGui
+
+    local btn = Instance.new("ImageButton")
+    btn.Size = UDim2.fromOffset(65, 65)
+    btn.Position = UDim2.new(0, 20, 0, 60)
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    btn.BackgroundTransparency = 0.2
+    btn.BorderSizePixel = 0
+    btn.Image = "rbxassetid://93855619818251"
+    btn.ScaleType = Enum.ScaleType.Fit
+    btn.Parent = gui
+
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(80, 80, 80)
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = btn
+
+    -- Hover effects
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {
+            BackgroundTransparency = 0.1,
+            BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {
+            BackgroundTransparency = 0.2,
+            BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        }):Play()
+    end)
+
+    local dragging, dragStart, startPos, moved
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startPos = btn.Position
+            TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.fromOffset(60, 60)}):Play()
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            if math.abs(d.X) > 5 or math.abs(d.Y) > 5 then moved = true end
+            btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.fromOffset(65, 65)}):Play()
+        end
+    end)
+
+    btn.MouseButton1Click:Connect(function()
+        if moved then return end
+        if Window then
+            pcall(function()
+                Window:Minimize()
+            end)
+        end
+    end)
+end)
