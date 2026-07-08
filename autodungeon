@@ -25,6 +25,7 @@ local Tabs = {
     Main = Window:AddTab({ Title = "Dungeon", Icon = "swords" }),
     Gate = Window:AddTab({ Title = "Gate", Icon = "key" }),
     Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
+    Position = Window:AddTab({ Title = "Position", Icon = "map-pin" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
 }
 
@@ -60,6 +61,8 @@ Tabs.Main:AddSlider("LeaveRoom", {
         LeaveRoom = Value
     end
 })
+
+local AutoReturnDungeonEnabled = false
 
 local StatusLabel = Tabs.Main:AddParagraph({ Title = "Status", Content = "Idle" })
 
@@ -134,6 +137,8 @@ Tabs.Gate:AddSlider("LeaveGateWave", {
     Callback = function(Value) LeaveGateWave = Value end
 })
 
+local AutoReturnGateEnabled = false
+
 local GateStatusLabel = Tabs.Gate:AddParagraph({ Title = "Status", Content = "Idle" })
 
 local function setGateStatus(text)
@@ -141,6 +146,12 @@ local function setGateStatus(text)
         pcall(function() GateStatusLabel:SetDesc(text) end)
     end
 end
+
+local HttpService = game:GetService("HttpService")
+local savedReturnWorld = nil
+local savedReturnCFrame = nil
+local wasInDungeon = false
+local wasInGate = false
 
 local function getCharacter()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -247,6 +258,100 @@ local function MovementGoTo(targetCFrame)
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end)
+    return false
+end
+
+local function executeAutoReturn()
+    warn(string.format("[AutoReturn] Started. savedReturnWorld=%s, savedReturnCFrame=%s", 
+        tostring(savedReturnWorld), tostring(savedReturnCFrame)))
+    if not savedReturnWorld or not savedReturnCFrame then 
+        warn("[AutoReturn] Aborting: savedReturnWorld or savedReturnCFrame is nil!")
+        return 
+    end
+    
+    -- Wait for any initial loading screen from leaving the Dungeon/Gate to finish
+    pcall(function()
+        local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+        if tl then 
+            local teleportLoading = tl:FindFirstChild("TeleportLoading")
+            if teleportLoading and teleportLoading.Visible then
+                warn("[AutoReturn] Leaving loading screen detected. Waiting for it to finish...")
+                repeat task.wait(0.1) until not teleportLoading.Visible
+                task.wait(1)
+            end
+        end
+    end)
+
+    local currentVis = LocalPlayer:GetAttribute("VisibilityContext")
+    local targetVis = "World:" .. tostring(savedReturnWorld)
+    warn(string.format("[AutoReturn] Checking worlds. currentVis=%s, targetVis=%s", tostring(currentVis), tostring(targetVis)))
+    
+    if currentVis == targetVis then
+        warn("[AutoReturn] Same world. Teleporting to saved CFrame...")
+        MovementGoTo(savedReturnCFrame)
+    else
+        local worldsFolder = workspace:FindFirstChild("Worlds")
+        if worldsFolder then
+            local targetWorldFolder = worldsFolder:FindFirstChild(tostring(savedReturnWorld))
+            if targetWorldFolder then
+                local teleporter = targetWorldFolder:FindFirstChild("Teleporter")
+                if tostring(savedReturnWorld) == "0" then
+                    teleporter = targetWorldFolder:FindFirstChild("Void")
+                end
+                
+                if teleporter then
+                    warn("[AutoReturn] Different world. Teleporting to teleporter portal for World " .. tostring(savedReturnWorld))
+                    local root = getRootPart()
+                    if root then
+                        if typeof(firetouchinterest) == "function" then
+                            pcall(function()
+                                firetouchinterest(root, teleporter, 0)
+                                task.wait(0.1)
+                                firetouchinterest(root, teleporter, 1)
+                            end)
+                        else
+                            MovementGoTo(teleporter.CFrame)
+                        end
+                        
+                        local teleportLoading
+                        pcall(function()
+                            local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                            if tl then teleportLoading = tl:FindFirstChild("TeleportLoading") end
+                        end)
+                        
+                        if teleportLoading then
+                            warn("[AutoReturn] Inter-world teleport loading detected. Waiting...")
+                            local t = tick()
+                            repeat task.wait(0.1) until teleportLoading.Visible or (tick() - t > 5)
+                            if teleportLoading.Visible then
+                                repeat task.wait(0.1) until not teleportLoading.Visible
+                                task.wait(1)
+                            end
+                        else
+                            warn("[AutoReturn] No loading screen found, waiting 4s fallback...")
+                            task.wait(4)
+                        end
+                        
+                        local newVis = LocalPlayer:GetAttribute("VisibilityContext")
+                        warn("[AutoReturn] Teleport finished. newVis=" .. tostring(newVis))
+                        if newVis == targetVis then
+                            warn("[AutoReturn] Correct world reached. Teleporting to saved CFrame...")
+                            MovementGoTo(savedReturnCFrame)
+                        else
+                            warn("[AutoReturn] Failed to reach correct world! newVis=" .. tostring(newVis))
+                        end
+                    end
+                else
+                    warn("[AutoReturn] Teleporter not found in World " .. tostring(savedReturnWorld))
+                end
+            else
+                warn("[AutoReturn] Target World Folder not found in Workspace.Worlds: " .. tostring(savedReturnWorld))
+            end
+        else
+            warn("[AutoReturn] Worlds folder not found in workspace!")
+        end
+    end
+    warn("[AutoReturn] Execution finished.")
 end
 
 local function optimalFarmPosition(enemies)
@@ -334,6 +439,91 @@ local gateEntryTime = nil
 local dungeonEntryTime = nil
 local arisingPromptTarget = nil
 
+local function saveReturnData()
+    local data = {
+        world = savedReturnWorld,
+        cframe = savedReturnCFrame and {savedReturnCFrame:GetComponents()} or nil,
+        wasInDungeon = wasInDungeon,
+        wasInGate = wasInGate
+    }
+    pcall(function()
+        writefile("AnimeAstral_ReturnData.json", HttpService:JSONEncode(data))
+    end)
+end
+
+local function loadReturnData()
+    pcall(function()
+        if isfile and isfile("AnimeAstral_ReturnData.json") then
+            local data = HttpService:JSONDecode(readfile("AnimeAstral_ReturnData.json"))
+            savedReturnWorld = data.world
+            wasInDungeon = data.wasInDungeon
+            wasInGate = data.wasInGate
+            if data.cframe then
+                savedReturnCFrame = CFrame.new(unpack(data.cframe))
+            end
+            warn(string.format("[AutoReturn] Loaded saved return data. World: %s", tostring(savedReturnWorld)))
+        end
+    end)
+end
+
+loadReturnData()
+
+local PositionParagraph = Tabs.Position:AddParagraph({
+    Title = "Saved Position",
+    Content = "World: " .. tostring(savedReturnWorld) .. "\nPosition: " .. (savedReturnCFrame and string.format("%.1f, %.1f, %.1f", savedReturnCFrame.Position.X, savedReturnCFrame.Position.Y, savedReturnCFrame.Position.Z) or "nil")
+})
+
+Tabs.Position:AddButton({
+    Title = "Save Current Position",
+    Description = "Manually saves your current World and Position.",
+    Callback = function()
+        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+        local root = getRootPart()
+        
+        local currentWorld = "Unknown"
+        local currentPosStr = "nil"
+        
+        if visibility then
+            local w = string.match(visibility, "^World:(%d+)$")
+            if not w then w = string.match(visibility, "World(%d+)") end
+            if not w then w = visibility end
+            savedReturnWorld = w
+            currentWorld = w
+        else
+            currentWorld = "nil (No VisibilityContext)"
+        end
+        
+        if root then
+            savedReturnCFrame = root.CFrame
+            local pos = root.Position
+            currentPosStr = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
+        end
+        
+        saveReturnData()
+        PositionParagraph:SetDesc(string.format("World: %s\nPosition: %s", tostring(currentWorld), currentPosStr))
+        
+        Fluent:Notify({
+            Title = "Position Saved",
+            Content = "Saved returning position successfully.",
+            Duration = 3
+        })
+    end
+})
+
+Tabs.Position:AddToggle("AutoReturnDungeon", {
+    Title = "Auto Return (Dungeon)",
+    Description = "Returns to saved position after dungeon.",
+    Default = false,
+    Callback = function(state) AutoReturnDungeonEnabled = state end
+})
+
+Tabs.Position:AddToggle("AutoReturnGate", {
+    Title = "Auto Return (Gate)",
+    Description = "Returns to saved position after gate.",
+    Default = false,
+    Callback = function(state) AutoReturnGateEnabled = state end
+})
+
 task.spawn(function()
     while task.wait(0.03) do
         local isAutoDungeonEnabled = (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
@@ -343,6 +533,27 @@ task.spawn(function()
         local isAutoGateAriseEnabled = (Options.GateAutoArise and Options.GateAutoArise.Value ~= nil) and Options.GateAutoArise.Value or AutoGateAriseEnabled
         local targetLeaveRoom = tonumber(Options.LeaveRoom and Options.LeaveRoom.Value) or tonumber(LeaveRoom) or 50
         local targetLeaveGateWave = tonumber(Options.LeaveGateWave and Options.LeaveGateWave.Value) or tonumber(LeaveGateWave) or 50
+
+        -- Tracking & Return Logic
+        pcall(function()
+            local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+            if visibility and string.match(visibility, "^World:(%d+)$") then
+                local worldNum = string.match(visibility, "^World:(%d+)$")
+                
+                if wasInDungeon or wasInGate then
+                    local doReturnDungeon = wasInDungeon and AutoReturnDungeonEnabled
+                    local doReturnGate = wasInGate and AutoReturnGateEnabled
+                    
+                    wasInDungeon = false
+                    wasInGate = false
+                    saveReturnData()
+                    
+                    if doReturnDungeon or doReturnGate then
+                        executeAutoReturn()
+                    end
+                end
+            end
+        end)
 
         if not isAutoDungeonEnabled and not isAutoGateEnabled then 
             setStatus("Waiting (Disabled)")
@@ -465,6 +676,15 @@ task.spawn(function()
             end
         end)
 
+        if inDungeon and not wasInDungeon then 
+            wasInDungeon = true 
+            saveReturnData()
+        end
+        if inGate and not wasInGate then 
+            wasInGate = true 
+            saveReturnData()
+        end
+
         local currentRoom = 0
         pcall(function()
             local roomLabel = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
@@ -520,7 +740,7 @@ task.spawn(function()
             canJoinDungeon = false
         elseif inGate then
             if Options.LeaveForHigherPriority.Value then
-                canJoinDungeon = (tonumber(Options.DungeonPriority.Value) or 2) < (tonumber(Options.GatePriority.Value) or 1)
+                canJoinDungeon = (tonumber(Options.DungeonPriority.Value) or 1) < (tonumber(Options.GatePriority.Value) or 2)
             else
                 canJoinDungeon = false
             end
@@ -531,9 +751,39 @@ task.spawn(function()
             canJoinGate = false
         elseif inDungeon then
             if Options.LeaveForHigherPriority.Value then
-                canJoinGate = (tonumber(Options.GatePriority.Value) or 1) < (tonumber(Options.DungeonPriority.Value) or 2)
+                canJoinGate = (tonumber(Options.GatePriority.Value) or 2) < (tonumber(Options.DungeonPriority.Value) or 1)
             else
                 canJoinGate = false
+            end
+        end
+
+        -- Lobby priority override: if both invites are visible in lobby, respect priority
+        if not inDungeon and not inGate then
+            local lobbyDungeonInviteVisible = false
+            local lobbyGateInviteVisible = false
+            pcall(function()
+                local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+                local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
+                if gamemodeNotify then
+                    local notifyDungeon = gamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
+                    if notifyDungeon and notifyDungeon.Visible then
+                        lobbyDungeonInviteVisible = true
+                    end
+                    local notifyGate = gamemodeNotify:FindFirstChild("Notify_Raid_World5")
+                    if notifyGate and notifyGate.Visible then
+                        lobbyGateInviteVisible = true
+                    end
+                end
+            end)
+            
+            if lobbyDungeonInviteVisible and lobbyGateInviteVisible then
+                local dp = tonumber(Options.DungeonPriority.Value) or 1
+                local gp = tonumber(Options.GatePriority.Value) or 2
+                if dp < gp then
+                    canJoinGate = false
+                elseif gp < dp then
+                    canJoinDungeon = false
+                end
             end
         end
 
@@ -548,9 +798,34 @@ task.spawn(function()
                 if notifyDungeon and notifyDungeon.Visible then
                     local yesBtn = notifyDungeon:FindFirstChild("Actions") and notifyDungeon.Actions:FindFirstChild("YES")
                     if yesBtn then
+                        local startTime = tick()
+                        warn(string.format("[AutoDungeon] Invite detected! inDungeon=%s, inGate=%s, canJoinDungeon=%s, DungeonPriority=%s, GatePriority=%s, LeaveForHigherPriority=%s",
+                            tostring(inDungeon), tostring(inGate), tostring(canJoinDungeon),
+                            tostring(Options.DungeonPriority and Options.DungeonPriority.Value),
+                            tostring(Options.GatePriority and Options.GatePriority.Value),
+                            tostring(Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value)))
+                        
                         setStatus("Dungeon notification detected, waiting 0.5s...")
                         task.wait(0.5)
+
+                        local gNotify = notifyGui.Main:FindFirstChild("GamemodeNotify") and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
+                        if gNotify and gNotify.Visible then
+                            local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
+                            local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
+                            if gp < dp then
+                                warn("[AutoDungeon] Aborted! Gate invite appeared and has higher priority.")
+                                return
+                            end
+                        end
+
                         setStatus("Clicking YES...")
+
+                        if AutoReturnDungeonEnabled then
+                            saveReturnData()
+                            task.wait(0.3)
+                        end
+
+                        warn("[AutoDungeon] Clicking YES now. Time since detection: " .. tostring(tick() - startTime) .. "s")
                         robustClickObject(yesBtn)
                         hasLeftDungeon = false
                         
@@ -605,9 +880,34 @@ task.spawn(function()
                                 if allowed then
                                     local yesBtn = notifyGate:FindFirstChild("Actions") and notifyGate.Actions:FindFirstChild("YES")
                                     if yesBtn then
+                                        local startTime = tick()
+                                        warn(string.format("[AutoGate] Invite detected! inDungeon=%s, inGate=%s, canJoinGate=%s, DungeonPriority=%s, GatePriority=%s, LeaveForHigherPriority=%s",
+                                            tostring(inDungeon), tostring(inGate), tostring(canJoinGate),
+                                            tostring(Options.DungeonPriority and Options.DungeonPriority.Value),
+                                            tostring(Options.GatePriority and Options.GatePriority.Value),
+                                            tostring(Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value)))
+                                        
                                         setGateStatus("Gate " .. rank .. " detected, waiting 0.5s...")
                                         task.wait(0.5)
+
+                                        local dNotify = notifyGui.Main:FindFirstChild("GamemodeNotify") and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
+                                        if dNotify and dNotify.Visible then
+                                            local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
+                                            local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
+                                            if dp < gp then
+                                                warn("[AutoGate] Aborted! Dungeon invite appeared and has higher priority.")
+                                                return
+                                            end
+                                        end
+
                                         setGateStatus("Clicking YES...")
+
+                                        if AutoReturnGateEnabled then
+                                            saveReturnData()
+                                            task.wait(0.3)
+                                        end
+
+                                        warn("[AutoGate] Clicking YES now. Time since detection: " .. tostring(tick() - startTime) .. "s")
                                         robustClickObject(yesBtn)
                                         hasLeftGate = false
 
@@ -866,14 +1166,14 @@ Tabs.Priority:AddDropdown("DungeonPriority", {
     Title = "Dungeon",
     Values = PRIORITY_VALUES,
     Multi = false,
-    Default = "2",
+    Default = "1",
 })
 
 Tabs.Priority:AddDropdown("GatePriority", {
     Title = "Gate",
     Values = PRIORITY_VALUES,
     Multi = false,
-    Default = "1",
+    Default = "2",
 })
 
 Tabs.Priority:AddToggle("LeaveForHigherPriority", {
