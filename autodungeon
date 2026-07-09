@@ -727,7 +727,7 @@ local function waitForWaveSpawn(folder, expectedCount)
     local lastCount = #targets
     
     while tick() - stableTime < 0.6 do
-        task.wait(0.1)
+        task.wait(0.05)
         targets = getAlive()
         if #targets >= expectedCount then
             return targets
@@ -741,7 +741,7 @@ local function waitForWaveSpawn(folder, expectedCount)
 end
 
 task.spawn(function()
-    while task.wait(0.03) do
+    while task.wait(0.15) do
         local isAutoDungeonEnabled = (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
         local isAutoGateEnabled = (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
         local isAutoLeaveEnabled = (Options.AutoLeave and Options.AutoLeave.Value ~= nil) and Options.AutoLeave.Value or AutoLeaveEnabled
@@ -1292,32 +1292,65 @@ task.spawn(function()
             setGateStatus("Waiting for Gate invite...")
         end
         
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.01) do
         local isAutoFarmEnabled = (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
-        if isAutoFarmEnabled and not inDungeon and not inGate then
-            local targets = selectedEnemyInstances()
-            if #targets > 0 then
-                local function checkFarmEnabled()
-                    local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                    local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                    local hasInvite = false
-                    pcall(function()
-                        if gamemodeNotify then
-                            for _, child in ipairs(gamemodeNotify:GetChildren()) do
-                                if string.match(child.Name, "Notify_") and child.Visible then
-                                    hasInvite = true
-                                    break
+        if isAutoFarmEnabled then
+            local inDungeon = false
+            local inGate = false
+            pcall(function()
+                local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+                if visibility then
+                    if string.find(visibility, "^Dungeon:") or string.find(visibility, "^Raid:") then
+                        inDungeon = true
+                    end
+                end
+            end)
+            if not inDungeon then
+                pcall(function()
+                    local dungeonGui = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
+                    if dungeonGui and dungeonGui.Enabled and dungeonGui:FindFirstChild("Main") and dungeonGui.Main.Visible then
+                        inDungeon = true
+                    end
+                end)
+            end
+            if not inGate then
+                pcall(function()
+                    local raidGui = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
+                    if raidGui and raidGui.Enabled and raidGui:FindFirstChild("Main") and raidGui.Main.Visible then
+                        inGate = true
+                    end
+                end)
+            end
+
+            if not inDungeon and not inGate then
+                local targets = selectedEnemyInstances()
+                if #targets > 0 then
+                    local function checkFarmEnabled()
+                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
+                        local hasInvite = false
+                        pcall(function()
+                            if gamemodeNotify then
+                                for _, child in ipairs(gamemodeNotify:GetChildren()) do
+                                    if string.match(child.Name, "Notify_") and child.Visible then
+                                        hasInvite = true
+                                        break
+                                    end
                                 end
                             end
-                        end
-                    end)
-                    if hasInvite then return false end
-                    
-                    return (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
+                        end)
+                        if hasInvite then return false end
+                        
+                        return (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
+                    end
+                    farmEnemies(targets, "Farm", "", checkFarmEnabled, nil)
+                else
+                    task.wait(0.1)
                 end
-                farmEnemies(targets, "Farm", "", checkFarmEnabled, nil)
-            else
-                setStatus("Waiting for selected enemies...")
-                task.wait(0.1)
             end
         end
     end
