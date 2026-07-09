@@ -22,6 +22,7 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
+    Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
     Main = Window:AddTab({ Title = "Dungeon", Icon = "swords" }),
     Gate = Window:AddTab({ Title = "Gate", Icon = "key" }),
     Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
@@ -30,6 +31,9 @@ local Tabs = {
 }
 
 local Options = Fluent.Options
+local EnemyDropdown = nil
+local AutoFarmEnabled = false
+local PerfectPositionEnabled = false
 
 local AutoDungeonEnabled = false
 local AutoLeaveEnabled = false
@@ -64,12 +68,7 @@ Tabs.Main:AddSlider("LeaveRoom", {
 
 local AutoReturnDungeonEnabled = false
 
-local StatusLabel = Tabs.Main:AddParagraph({ Title = "Status", Content = "Idle" })
-
 local function setStatus(text)
-    if StatusLabel then
-        pcall(function() StatusLabel:SetDesc(text) end)
-    end
 end
 
 local function selectedMultiValues(value)
@@ -139,12 +138,7 @@ Tabs.Gate:AddSlider("LeaveGateWave", {
 
 local AutoReturnGateEnabled = false
 
-local GateStatusLabel = Tabs.Gate:AddParagraph({ Title = "Status", Content = "Idle" })
-
 local function setGateStatus(text)
-    if GateStatusLabel then
-        pcall(function() GateStatusLabel:SetDesc(text) end)
-    end
 end
 
 local HttpService = game:GetService("HttpService")
@@ -183,11 +177,109 @@ local function isEnemyAlive(enemy)
     if not enemy or not enemy.Parent then return false end
     local dead = enemy:GetAttribute("EnemyDead")
     if dead == true then return false end
+    
     local healthReal = enemy:GetAttribute("HealthReal")
-    if type(healthReal) == "number" and healthReal <= 0 then return false end
+    if type(healthReal) == "number" then
+        return healthReal > 0
+    end
+    
     local hum = getHumanoid(enemy)
-    if hum and hum.Health <= 0 then return false end
+    if not hum or hum.Health <= 0 then return false end
     return true
+end
+
+local function getCurrentWorldId()
+    local vc = LocalPlayer:GetAttribute("VisibilityContext")
+    if vc then
+        return tostring(vc):match("World:(%d+)")
+    end
+    return nil
+end
+
+local function activeEnemiesFolder()
+    local worlds = workspace:FindFirstChild("Worlds")
+    if not worlds then return nil end
+    
+    local cw = getCurrentWorldId()
+    if cw and worlds:FindFirstChild(cw) then
+        local f = worlds[cw]:FindFirstChild("Enemies")
+        if f and #f:GetChildren() > 0 then return f end
+    end
+    
+    for _, w in ipairs(worlds:GetChildren()) do
+        local f = w:FindFirstChild("Enemies")
+        if f and #f:GetChildren() > 0 then return f end
+    end
+    
+    if cw and worlds:FindFirstChild(cw) then
+        local f = worlds[cw]:FindFirstChild("Enemies")
+        if f then return f end
+    end
+    for _, w in ipairs(worlds:GetChildren()) do
+        local f = w:FindFirstChild("Enemies")
+        if f then return f end
+    end
+    
+    return nil
+end
+
+local function setDropdownValues(dropdown, values)
+    if not dropdown then return end
+    local ok = false
+    if dropdown.SetValues then ok = pcall(function() dropdown:SetValues(values) end) end
+    if not ok then pcall(function() dropdown.Values = values end) end
+end
+
+local function refreshEnemies()
+    local enemyLabels = {}
+    local folder = activeEnemiesFolder()
+    if not folder then
+        -- We must use a global or pass it? Wait, EnemyDropdown isn't defined yet! 
+        -- Ah, EnemyDropdown is defined later! I will rely on Options.EnemyDropdown or pass it.
+        -- Actually, since EnemyDropdown is defined in the script, I will declare local EnemyDropdown = nil at the top of these helpers.
+        return
+    end
+
+    local found = {}
+    for _, enemy in ipairs(folder:GetChildren()) do
+        local cf = getObjectCFrame(enemy)
+        if cf then
+            local etype = enemy:GetAttribute("EnemyType") or "Unknown"
+            local label = enemy.Name .. " - " .. tostring(etype)
+            if not found[label] then
+                found[label] = true
+                table.insert(enemyLabels, label)
+            end
+        end
+    end
+
+    table.sort(enemyLabels)
+    if #enemyLabels == 0 then enemyLabels = { "--" } end
+    setDropdownValues(EnemyDropdown, enemyLabels)
+end
+
+local function selectedEnemyInstances()
+    local targets = {}
+    local val = (Options.EnemyDropdown and Options.EnemyDropdown.Value) or {}
+    local sel = selectedMultiValues(val)
+    if #sel == 0 then return targets end
+
+    local folder = activeEnemiesFolder()
+    if not folder then return targets end
+
+    local selSet = {}
+    for _, label in ipairs(sel) do selSet[label] = true end
+
+    for _, enemy in ipairs(folder:GetChildren()) do
+        if isEnemyAlive(enemy) then
+            local etype = enemy:GetAttribute("EnemyType") or "Unknown"
+            local label = enemy.Name .. " - " .. tostring(etype)
+            if selSet[label] then
+                table.insert(targets, enemy)
+            end
+        end
+    end
+    return targets
 end
 
 local function getPartRadius(part)
@@ -262,10 +354,7 @@ local function MovementGoTo(targetCFrame)
 end
 
 local function executeAutoReturn()
-    warn(string.format("[AutoReturn] Started. savedReturnWorld=%s, savedReturnCFrame=%s", 
-        tostring(savedReturnWorld), tostring(savedReturnCFrame)))
     if not savedReturnWorld or not savedReturnCFrame then 
-        warn("[AutoReturn] Aborting: savedReturnWorld or savedReturnCFrame is nil!")
         return 
     end
     
@@ -275,7 +364,6 @@ local function executeAutoReturn()
         if tl then 
             local teleportLoading = tl:FindFirstChild("TeleportLoading")
             if teleportLoading and teleportLoading.Visible then
-                warn("[AutoReturn] Leaving loading screen detected. Waiting for it to finish...")
                 repeat task.wait(0.1) until not teleportLoading.Visible
                 task.wait(1)
             end
@@ -284,10 +372,8 @@ local function executeAutoReturn()
 
     local currentVis = LocalPlayer:GetAttribute("VisibilityContext")
     local targetVis = "World:" .. tostring(savedReturnWorld)
-    warn(string.format("[AutoReturn] Checking worlds. currentVis=%s, targetVis=%s", tostring(currentVis), tostring(targetVis)))
     
     if currentVis == targetVis then
-        warn("[AutoReturn] Same world. Teleporting to saved CFrame...")
         MovementGoTo(savedReturnCFrame)
     else
         local worldsFolder = workspace:FindFirstChild("Worlds")
@@ -300,7 +386,6 @@ local function executeAutoReturn()
                 end
                 
                 if teleporter then
-                    warn("[AutoReturn] Different world. Teleporting to teleporter portal for World " .. tostring(savedReturnWorld))
                     local root = getRootPart()
                     if root then
                         if typeof(firetouchinterest) == "function" then
@@ -320,7 +405,6 @@ local function executeAutoReturn()
                         end)
                         
                         if teleportLoading then
-                            warn("[AutoReturn] Inter-world teleport loading detected. Waiting...")
                             local t = tick()
                             repeat task.wait(0.1) until teleportLoading.Visible or (tick() - t > 5)
                             if teleportLoading.Visible then
@@ -328,30 +412,22 @@ local function executeAutoReturn()
                                 task.wait(1)
                             end
                         else
-                            warn("[AutoReturn] No loading screen found, waiting 4s fallback...")
                             task.wait(4)
                         end
                         
                         local newVis = LocalPlayer:GetAttribute("VisibilityContext")
-                        warn("[AutoReturn] Teleport finished. newVis=" .. tostring(newVis))
                         if newVis == targetVis then
-                            warn("[AutoReturn] Correct world reached. Teleporting to saved CFrame...")
                             MovementGoTo(savedReturnCFrame)
                         else
-                            warn("[AutoReturn] Failed to reach correct world! newVis=" .. tostring(newVis))
                         end
                     end
                 else
-                    warn("[AutoReturn] Teleporter not found in World " .. tostring(savedReturnWorld))
                 end
             else
-                warn("[AutoReturn] Target World Folder not found in Workspace.Worlds: " .. tostring(savedReturnWorld))
             end
         else
-            warn("[AutoReturn] Worlds folder not found in workspace!")
         end
     end
-    warn("[AutoReturn] Execution finished.")
 end
 
 local function optimalFarmPosition(enemies)
@@ -461,7 +537,6 @@ local function loadReturnData()
             if data.cframe then
                 savedReturnCFrame = CFrame.new(unpack(data.cframe))
             end
-            warn(string.format("[AutoReturn] Loaded saved return data. World: %s", tostring(savedReturnWorld)))
         end
     end)
 end
@@ -523,6 +598,147 @@ Tabs.Position:AddToggle("AutoReturnGate", {
     Default = false,
     Callback = function(state) AutoReturnGateEnabled = state end
 })
+
+Tabs.Farm:AddToggle("AutoFarm", {
+    Title = "Auto Farm",
+    Default = false,
+    Callback = function(state) AutoFarmEnabled = state end
+})
+
+EnemyDropdown = Tabs.Farm:AddDropdown("EnemyDropdown", {
+    Title = "Select Enemies",
+    Values = { "--" },
+    Multi = true,
+    Default = {},
+})
+
+Tabs.Farm:AddButton({
+    Title = "Refresh Enemies",
+    Description = "",
+    Callback = function() pcall(refreshEnemies) end,
+})
+
+Tabs.Farm:AddToggle("PerfectPosition", {
+    Title = "Perfect Position",
+    Description = "Teleports to the center of multiple enemies to hit them all.",
+    Default = false,
+    Callback = function(state) PerfectPositionEnabled = state end
+})
+
+local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
+    local statusFunc = typeStr == "Gate" and setGateStatus or setStatus
+    
+    local useOptimal = true
+    if typeStr == "Farm" then
+        useOptimal = (Options.PerfectPosition and Options.PerfectPosition.Value ~= nil) and Options.PerfectPosition.Value or PerfectPositionEnabled
+    end
+    
+    if #targets > 0 then
+        local initialCount = #targets
+        local tcf, coveredCount = nil, 0
+        if useOptimal then
+            tcf, coveredCount = optimalFarmPosition(targets)
+        end
+        
+        if tcf and coveredCount >= 2 then
+            local range = getPlayerRange()
+            local prefix = (zoneStr and zoneStr ~= "") and (zoneStr .. " ") or ""
+            statusFunc(prefix .. "Farming (Perfect Position: " .. coveredCount .. "/" .. #targets .. " enemies)")
+            MovementGoTo(tcf)
+            
+            local startTime = tick()
+            while tick() - startTime < 3 and checkEnabledFunc() do
+                if folder then
+                    local currentCount = 0
+                    for _, e in ipairs(folder:GetChildren()) do
+                        if isEnemyAlive(e) then currentCount = currentCount + 1 end
+                    end
+                    if currentCount > initialCount then break end
+                end
+
+                local anyCoveredAlive = false
+                for _, enemy in ipairs(targets) do
+                    if isEnemyAlive(enemy) then
+                        local ecf = getObjectCFrame(enemy)
+                        if ecf then
+                            local dist = (Vector2.new(ecf.Position.X, ecf.Position.Z) - Vector2.new(tcf.Position.X, tcf.Position.Z)).Magnitude
+                            if dist <= range * 0.95 then
+                                anyCoveredAlive = true
+                                break
+                            end
+                        end
+                    end
+                end
+                if not anyCoveredAlive then break end
+                task.wait(0.03)
+            end
+        else
+            for _, enemy in ipairs(targets) do
+                if not checkEnabledFunc() then break end
+                
+                if folder then
+                    local currentCount = 0
+                    for _, e in ipairs(folder:GetChildren()) do
+                        if isEnemyAlive(e) then currentCount = currentCount + 1 end
+                    end
+                    if currentCount > initialCount then break end
+                end
+                
+                while isEnemyAlive(enemy) and checkEnabledFunc() do
+                    if folder then
+                        local currentCount = 0
+                        for _, e in ipairs(folder:GetChildren()) do
+                            if isEnemyAlive(e) then currentCount = currentCount + 1 end
+                        end
+                        if currentCount > initialCount then break end
+                    end
+                    
+                    local cf = getObjectCFrame(enemy)
+                    if cf then
+                        local prefix = (zoneStr and zoneStr ~= "") and (zoneStr .. " ") or ""
+                        statusFunc(prefix .. "Farming: " .. enemy.Name)
+                        MovementGoTo(cf + Vector3.new(0, 3, 0))
+                    end
+                    task.wait(0.03)
+                end
+            end
+        end
+    else
+        statusFunc("Waiting for enemies or " .. string.lower(typeStr) .. " finished...")
+    end
+end
+
+local function waitForWaveSpawn(folder, expectedCount)
+    local targets = {}
+    if not folder then return targets end
+
+    local function getAlive()
+        local t = {}
+        for _, e in ipairs(folder:GetChildren()) do
+            if isEnemyAlive(e) then table.insert(t, e) end
+        end
+        return t
+    end
+    
+    targets = getAlive()
+    if #targets == 0 or #targets >= expectedCount then return targets end
+    
+    local stableTime = tick()
+    local lastCount = #targets
+    
+    while tick() - stableTime < 0.6 do
+        task.wait(0.1)
+        targets = getAlive()
+        if #targets >= expectedCount then
+            return targets
+        elseif #targets > lastCount then
+            stableTime = tick()
+            lastCount = #targets
+        end
+    end
+    
+    return targets
+end
 
 task.spawn(function()
     while task.wait(0.03) do
@@ -799,11 +1015,6 @@ task.spawn(function()
                     local yesBtn = notifyDungeon:FindFirstChild("Actions") and notifyDungeon.Actions:FindFirstChild("YES")
                     if yesBtn then
                         local startTime = tick()
-                        warn(string.format("[AutoDungeon] Invite detected! inDungeon=%s, inGate=%s, canJoinDungeon=%s, DungeonPriority=%s, GatePriority=%s, LeaveForHigherPriority=%s",
-                            tostring(inDungeon), tostring(inGate), tostring(canJoinDungeon),
-                            tostring(Options.DungeonPriority and Options.DungeonPriority.Value),
-                            tostring(Options.GatePriority and Options.GatePriority.Value),
-                            tostring(Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value)))
                         
                         setStatus("Dungeon notification detected, waiting 0.5s...")
                         task.wait(0.5)
@@ -813,7 +1024,6 @@ task.spawn(function()
                             local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
                             local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
                             if gp < dp then
-                                warn("[AutoDungeon] Aborted! Gate invite appeared and has higher priority.")
                                 return
                             end
                         end
@@ -825,7 +1035,6 @@ task.spawn(function()
                             task.wait(0.3)
                         end
 
-                        warn("[AutoDungeon] Clicking YES now. Time since detection: " .. tostring(tick() - startTime) .. "s")
                         robustClickObject(yesBtn)
                         hasLeftDungeon = false
                         
@@ -881,11 +1090,6 @@ task.spawn(function()
                                     local yesBtn = notifyGate:FindFirstChild("Actions") and notifyGate.Actions:FindFirstChild("YES")
                                     if yesBtn then
                                         local startTime = tick()
-                                        warn(string.format("[AutoGate] Invite detected! inDungeon=%s, inGate=%s, canJoinGate=%s, DungeonPriority=%s, GatePriority=%s, LeaveForHigherPriority=%s",
-                                            tostring(inDungeon), tostring(inGate), tostring(canJoinGate),
-                                            tostring(Options.DungeonPriority and Options.DungeonPriority.Value),
-                                            tostring(Options.GatePriority and Options.GatePriority.Value),
-                                            tostring(Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value)))
                                         
                                         setGateStatus("Gate " .. rank .. " detected, waiting 0.5s...")
                                         task.wait(0.5)
@@ -895,7 +1099,6 @@ task.spawn(function()
                                             local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
                                             local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
                                             if dp < gp then
-                                                warn("[AutoGate] Aborted! Dungeon invite appeared and has higher priority.")
                                                 return
                                             end
                                         end
@@ -907,7 +1110,6 @@ task.spawn(function()
                                             task.wait(0.3)
                                         end
 
-                                        warn("[AutoGate] Clicking YES now. Time since detection: " .. tostring(tick() - startTime) .. "s")
                                         robustClickObject(yesBtn)
                                         hasLeftGate = false
 
@@ -983,7 +1185,6 @@ task.spawn(function()
             end
 
             if isAutoLeaveEnabled and currentRoom >= targetLeaveRoom and currentRoom > 0 then
-                warn("[AutoDungeon] Target Room Reached: currentRoom=" .. tostring(currentRoom) .. " targetLeaveRoom=" .. tostring(targetLeaveRoom))
                 setStatus("Target Room Reached (Room " .. currentRoom .. "). Leaving...")
                 pcall(function()
                     local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
@@ -999,44 +1200,11 @@ task.spawn(function()
                 continue
             end
 
-            local targets = {}
-            for _, enemy in ipairs(dungeonEnemiesFolder:GetChildren()) do
-                if isEnemyAlive(enemy) then
-                    table.insert(targets, enemy)
-                end
-            end
+            local targets = waitForWaveSpawn(dungeonEnemiesFolder, 5)
 
-            if #targets > 0 then
-                lastDungeonEmptyTime = tick()
-                local tcf, coveredCount = optimalFarmPosition(targets)
-                if tcf then
-                    local range = getPlayerRange()
-                    local roomText = currentRoom > 0 and ("[Room " .. currentRoom .. "] ") or ""
-                    setStatus(roomText .. "Farming (Perfect Position: " .. coveredCount .. "/" .. #targets .. " enemies)")
-                    MovementGoTo(tcf)
-                    
-                    local startTime = tick()
-                    while tick() - startTime < 3 and (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil and Options.AutoDungeon.Value or AutoDungeonEnabled) do
-                        local anyCoveredAlive = false
-                        for _, enemy in ipairs(targets) do
-                            if isEnemyAlive(enemy) then
-                                local ecf = getObjectCFrame(enemy)
-                                if ecf then
-                                    local dist = (Vector2.new(ecf.Position.X, ecf.Position.Z) - Vector2.new(tcf.Position.X, tcf.Position.Z)).Magnitude
-                                    if dist <= range * 0.95 then
-                                        anyCoveredAlive = true
-                                        break
-                                    end
-                                end
-                            end
-                        end
-                        if not anyCoveredAlive then break end
-                        task.wait(0.03)
-                    end
-                end
-            else
-                setStatus("Waiting for enemies or dungeon finished...")
-            end
+            farmEnemies(targets, "Dungeon", currentRoom > 0 and ("[Room " .. currentRoom .. "]") or "", function()
+                return (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
+            end, dungeonEnemiesFolder)
         elseif isAutoDungeonEnabled then
             setStatus("Waiting for Dungeon invite...")
         end
@@ -1100,7 +1268,6 @@ task.spawn(function()
                     end
 
                     if isAutoLeaveGateEnabled and currentGateWave >= targetLeaveGateWave and currentGateWave > 0 then
-                        warn("[AutoGate] Target Wave Reached: currentGateWave=" .. tostring(currentGateWave) .. " targetLeaveGateWave=" .. tostring(targetLeaveGateWave))
                         setGateStatus("Target Wave Reached (Wave " .. currentGateWave .. "). Leaving...")
                         pcall(function()
                             local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
@@ -1114,67 +1281,86 @@ task.spawn(function()
                             end
                         end)
                     else
-                        local targets = {}
-                        for _, enemy in ipairs(gateEnemiesFolder:GetChildren()) do
-                            if isEnemyAlive(enemy) then
-                                table.insert(targets, enemy)
-                            end
-                        end
+                        local targets = waitForWaveSpawn(gateEnemiesFolder, 5)
 
-                        if #targets > 0 then
-                            lastGateEmptyTime = tick()
-                            local tcf, coveredCount = optimalFarmPosition(targets)
-                            if tcf then
-                                local range = getPlayerRange()
-                                local waveText = currentGateWave > 0 and ("[Wave " .. currentGateWave .. "] ") or ""
-                                setGateStatus(waveText .. "Farming (Perfect Position: " .. coveredCount .. "/" .. #targets .. " enemies)")
-                                MovementGoTo(tcf)
-                                
-                                local startTime = tick()
-                                while tick() - startTime < 3 and (Options.AutoGate and Options.AutoGate.Value ~= nil and Options.AutoGate.Value or AutoGateEnabled) do
-                                    local anyCoveredAlive = false
-                                    for _, enemy in ipairs(targets) do
-                                        if isEnemyAlive(enemy) then
-                                            local ecf = getObjectCFrame(enemy)
-                                            if ecf then
-                                                local dist = (Vector2.new(ecf.Position.X, ecf.Position.Z) - Vector2.new(tcf.Position.X, tcf.Position.Z)).Magnitude
-                                                if dist <= range * 0.95 then
-                                                    anyCoveredAlive = true
-                                                    break
-                                                end
-                                            end
-                                        end
-                                    end
-                                    if not anyCoveredAlive then break end
-                                    task.wait(0.03)
-                                end
-                            end
-                        else
-                            setGateStatus("Waiting for enemies or gate finished...")
-                        end
+                        farmEnemies(targets, "Gate", currentGateWave > 0 and ("[Wave " .. currentGateWave .. "]") or "", function()
+                            return (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
+                        end, gateEnemiesFolder)
                     end
                 end
         elseif isAutoGateEnabled then
             setGateStatus("Waiting for Gate invite...")
         end
+        
+        local isAutoFarmEnabled = (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
+        if isAutoFarmEnabled and not inDungeon and not inGate then
+            local targets = selectedEnemyInstances()
+            if #targets > 0 then
+                local function checkFarmEnabled()
+                    local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+                    local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
+                    local hasInvite = false
+                    pcall(function()
+                        if gamemodeNotify then
+                            for _, child in ipairs(gamemodeNotify:GetChildren()) do
+                                if string.match(child.Name, "Notify_") and child.Visible then
+                                    hasInvite = true
+                                    break
+                                end
+                            end
+                        end
+                    end)
+                    if hasInvite then return false end
+                    
+                    return (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
+                end
+                farmEnemies(targets, "Farm", "", checkFarmEnabled, nil)
+            else
+                setStatus("Waiting for selected enemies...")
+                task.wait(0.1)
+            end
+        end
     end
 end)
 
 local PRIORITY_VALUES = { "1", "2" }
+local updatingPriority = false
 
-Tabs.Priority:AddDropdown("DungeonPriority", {
+local DungeonPriorityDrop = Tabs.Priority:AddDropdown("DungeonPriority", {
     Title = "Dungeon",
     Values = PRIORITY_VALUES,
     Multi = false,
     Default = "1",
 })
 
-Tabs.Priority:AddDropdown("GatePriority", {
+local GatePriorityDrop = Tabs.Priority:AddDropdown("GatePriority", {
     Title = "Gate",
     Values = PRIORITY_VALUES,
     Multi = false,
     Default = "2",
 })
+
+DungeonPriorityDrop:OnChanged(function(val)
+    if updatingPriority then return end
+    updatingPriority = true
+    if val == "1" then
+        GatePriorityDrop:SetValue("2")
+    elseif val == "2" then
+        GatePriorityDrop:SetValue("1")
+    end
+    updatingPriority = false
+end)
+
+GatePriorityDrop:OnChanged(function(val)
+    if updatingPriority then return end
+    updatingPriority = true
+    if val == "1" then
+        DungeonPriorityDrop:SetValue("2")
+    elseif val == "2" then
+        DungeonPriorityDrop:SetValue("1")
+    end
+    updatingPriority = false
+end)
 
 Tabs.Priority:AddToggle("LeaveForHigherPriority", {
     Title = "Leave for Higher Priority",
@@ -1208,6 +1394,7 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 
 Window:SelectTab(1)
+pcall(refreshEnemies)
 Fluent:Notify({ Title = "Auto Dungeon", Content = "Script loaded successfully!", Duration = 3 })
 
 -- UI Toggle Button
