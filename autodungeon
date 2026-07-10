@@ -262,7 +262,6 @@ local function selectedEnemyInstances()
     local targets = {}
     local val = (Options.EnemyDropdown and Options.EnemyDropdown.Value) or {}
     local sel = selectedMultiValues(val)
-    if #sel == 0 then return targets end
 
     local folder = activeEnemiesFolder()
     if not folder then return targets end
@@ -274,7 +273,7 @@ local function selectedEnemyInstances()
         if isEnemyAlive(enemy) then
             local etype = enemy:GetAttribute("EnemyType") or "Unknown"
             local label = enemy.Name .. " - " .. tostring(etype)
-            if selSet[label] then
+            if #sel == 0 or selSet[label] then
                 table.insert(targets, enemy)
             end
         end
@@ -331,7 +330,7 @@ local function robustClickObject(obj)
             local x = obj.AbsolutePosition.X + (obj.AbsoluteSize.X / 2)
             local y = obj.AbsolutePosition.Y + (obj.AbsoluteSize.Y / 2) + inset.Y
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
-            task.wait(0.02)
+            task.wait(0.04)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
         end
     end)
@@ -670,7 +669,7 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
                     end
                 end
                 if not anyCoveredAlive then break end
-                task.wait(0.03)
+                task.wait(0.01)
             end
         else
             for _, enemy in ipairs(targets) do
@@ -699,7 +698,7 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
                         statusFunc(prefix .. "Farming: " .. enemy.Name)
                         MovementGoTo(cf + Vector3.new(0, 3, 0))
                     end
-                    task.wait(0.03)
+                    task.wait(0.01)
                 end
             end
         end
@@ -727,7 +726,7 @@ local function waitForWaveSpawn(folder, expectedCount)
     local lastCount = #targets
     
     while tick() - stableTime < 0.6 do
-        task.wait(0.05)
+        task.wait(0.01)
         targets = getAlive()
         if #targets >= expectedCount then
             return targets
@@ -741,7 +740,7 @@ local function waitForWaveSpawn(folder, expectedCount)
 end
 
 task.spawn(function()
-    while task.wait(0.15) do
+    while task.wait(0.1) do
         local isAutoDungeonEnabled = (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
         local isAutoGateEnabled = (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
         local isAutoLeaveEnabled = (Options.AutoLeave and Options.AutoLeave.Value ~= nil) and Options.AutoLeave.Value or AutoLeaveEnabled
@@ -1296,7 +1295,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while task.wait(0.01) do
+    while task.wait() do
         local isAutoFarmEnabled = (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
         if isAutoFarmEnabled then
             local inDungeon = false
@@ -1349,7 +1348,7 @@ task.spawn(function()
                     end
                     farmEnemies(targets, "Farm", "", checkFarmEnabled, nil)
                 else
-                    task.wait(0.1)
+                    task.wait(0.01)
                 end
             end
         end
