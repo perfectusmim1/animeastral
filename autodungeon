@@ -25,7 +25,9 @@ local Tabs = {
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
     Main = Window:AddTab({ Title = "Dungeon", Icon = "swords" }),
     Gate = Window:AddTab({ Title = "Gate", Icon = "key" }),
+    Trial = Window:AddTab({ Title = "Trial", Icon = "timer" }),
     Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
+    Timing = Window:AddTab({ Title = "Timing", Icon = "clock" }),
     Position = Window:AddTab({ Title = "Position", Icon = "map-pin" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
 }
@@ -38,6 +40,14 @@ local PerfectPositionEnabled = false
 local AutoDungeonEnabled = false
 local AutoLeaveEnabled = false
 local LeaveRoom = 50
+
+local AutoTrialEasyEnabled = false
+local AutoLeaveTrialEasyEnabled = false
+local LeaveTrialEasyRoom = 50
+
+local AutoTrialMediumEnabled = false
+local AutoLeaveTrialMediumEnabled = false
+local LeaveTrialMediumRoom = 50
 
 Tabs.Main:AddToggle("AutoDungeon", {
     Title = "Auto Dungeon",
@@ -66,6 +76,52 @@ Tabs.Main:AddSlider("LeaveRoom", {
     end
 })
 
+local SectionTrialEasy = Tabs.Trial:AddSection("Time Trial Easy")
+
+Tabs.Trial:AddToggle("AutoTrialEasy", {
+    Title = "Auto Trial",
+    Default = false,
+    Callback = function(state) AutoTrialEasyEnabled = state end
+})
+
+Tabs.Trial:AddToggle("AutoLeaveTrialEasy", {
+    Title = "Auto Leave",
+    Default = false,
+    Callback = function(state) AutoLeaveTrialEasyEnabled = state end
+})
+
+Tabs.Trial:AddSlider("LeaveTrialEasyRoom", {
+    Title = "Leave Room",
+    Min = 1,
+    Max = 50,
+    Default = 50,
+    Rounding = 0.1,
+    Callback = function(Value) LeaveTrialEasyRoom = Value end
+})
+
+local SectionTrialMedium = Tabs.Trial:AddSection("Time Trial Medium")
+
+Tabs.Trial:AddToggle("AutoTrialMedium", {
+    Title = "Auto Trial",
+    Default = false,
+    Callback = function(state) AutoTrialMediumEnabled = state end
+})
+
+Tabs.Trial:AddToggle("AutoLeaveTrialMedium", {
+    Title = "Auto Leave",
+    Default = false,
+    Callback = function(state) AutoLeaveTrialMediumEnabled = state end
+})
+
+Tabs.Trial:AddSlider("LeaveTrialMediumRoom", {
+    Title = "Leave Room",
+    Min = 1,
+    Max = 50,
+    Default = 50,
+    Rounding = 0.1,
+    Callback = function(Value) LeaveTrialMediumRoom = Value end
+})
+
 local AutoReturnDungeonEnabled = false
 
 local function setStatus(text)
@@ -91,7 +147,7 @@ local function selectedMultiValues(value)
     return selected
 end
 
-local GATE_RANK_VALUES = { "E", "D", "C", "B"}
+local GATE_RANK_VALUES = { "E", "D", "C", "B", "A"}
 local AutoGateEnabled = false
 local AutoGateAriseEnabled = false
 local AutoLeaveGateEnabled = false
@@ -137,6 +193,8 @@ Tabs.Gate:AddSlider("LeaveGateWave", {
 })
 
 local AutoReturnGateEnabled = false
+local AutoReturnTrialEasyEnabled = false
+local AutoReturnTrialMediumEnabled = false
 
 local function setGateStatus(text)
 end
@@ -146,6 +204,9 @@ local savedReturnWorld = nil
 local savedReturnCFrame = nil
 local wasInDungeon = false
 local wasInGate = false
+local wasInTrialEasy = false
+local wasInTrialMedium = false
+local isReturning = false
 
 local function getCharacter()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -201,23 +262,31 @@ local function activeEnemiesFolder()
     if not worlds then return nil end
     
     local cw = getCurrentWorldId()
-    if cw and worlds:FindFirstChild(cw) then
-        local f = worlds[cw]:FindFirstChild("Enemies")
-        if f and #f:GetChildren() > 0 then return f end
+    if cw then
+        local w = worlds:FindFirstChild(cw)
+        if w then
+            return w:FindFirstChild("Enemies")
+        end
+        return nil
     end
     
-    for _, w in ipairs(worlds:GetChildren()) do
-        local f = w:FindFirstChild("Enemies")
-        if f and #f:GetChildren() > 0 then return f end
-    end
-    
-    if cw and worlds:FindFirstChild(cw) then
-        local f = worlds[cw]:FindFirstChild("Enemies")
-        if f then return f end
-    end
-    for _, w in ipairs(worlds:GetChildren()) do
-        local f = w:FindFirstChild("Enemies")
-        if f then return f end
+    local root = getRootPart()
+    if root then
+        local closestWorld = nil
+        local minDistance = math.huge
+        for _, w in ipairs(worlds:GetChildren()) do
+            local teleporter = w:FindFirstChild("Teleporter") or w:FindFirstChild("Void")
+            if teleporter then
+                local dist = (root.Position - teleporter.Position).Magnitude
+                if dist < minDistance then
+                    minDistance = dist
+                    closestWorld = w
+                end
+            end
+        end
+        if closestWorld and minDistance < 5000 then
+            return closestWorld:FindFirstChild("Enemies")
+        end
     end
     
     return nil
@@ -234,9 +303,6 @@ local function refreshEnemies()
     local enemyLabels = {}
     local folder = activeEnemiesFolder()
     if not folder then
-        -- We must use a global or pass it? Wait, EnemyDropdown isn't defined yet! 
-        -- Ah, EnemyDropdown is defined later! I will rely on Options.EnemyDropdown or pass it.
-        -- Actually, since EnemyDropdown is defined in the script, I will declare local EnemyDropdown = nil at the top of these helpers.
         return
     end
 
@@ -256,6 +322,35 @@ local function refreshEnemies()
     table.sort(enemyLabels)
     if #enemyLabels == 0 then enemyLabels = { "--" } end
     setDropdownValues(EnemyDropdown, enemyLabels)
+
+    if EnemyDropdown then
+        local currentVal = EnemyDropdown.Value
+        local newVal = {}
+        local labelSet = {}
+        for _, l in ipairs(enemyLabels) do labelSet[l] = true end
+        
+        local changed = false
+        if type(currentVal) == "table" then
+            for k, v in pairs(currentVal) do
+                if type(v) == "string" then
+                    if labelSet[v] then
+                        table.insert(newVal, v)
+                    else
+                        changed = true
+                    end
+                elseif type(k) == "string" and v == true then
+                    if labelSet[k] then
+                        newVal[k] = true
+                    else
+                        changed = true
+                    end
+                end
+            end
+        end
+        if changed then
+            pcall(function() EnemyDropdown:SetValue(newVal) end)
+        end
+    end
 end
 
 local function selectedEnemyInstances()
@@ -513,13 +608,21 @@ local hasLeftGate = false
 local gateEntryTime = nil
 local dungeonEntryTime = nil
 local arisingPromptTarget = nil
+local hasLeftTrialEasy = false
+local hasLeftTrialMedium = false
+local trialEasyEntryTime = nil
+local trialMediumEntryTime = nil
+local lastTrialEasyEmptyTime = tick()
+local lastTrialMediumEmptyTime = tick()
 
 local function saveReturnData()
     local data = {
         world = savedReturnWorld,
         cframe = savedReturnCFrame and {savedReturnCFrame:GetComponents()} or nil,
         wasInDungeon = wasInDungeon,
-        wasInGate = wasInGate
+        wasInGate = wasInGate,
+        wasInTrialEasy = wasInTrialEasy,
+        wasInTrialMedium = wasInTrialMedium
     }
     pcall(function()
         writefile("AnimeAstral_ReturnData.json", HttpService:JSONEncode(data))
@@ -533,6 +636,8 @@ local function loadReturnData()
             savedReturnWorld = data.world
             wasInDungeon = data.wasInDungeon
             wasInGate = data.wasInGate
+            wasInTrialEasy = data.wasInTrialEasy
+            wasInTrialMedium = data.wasInTrialMedium
             if data.cframe then
                 savedReturnCFrame = CFrame.new(unpack(data.cframe))
             end
@@ -596,6 +701,20 @@ Tabs.Position:AddToggle("AutoReturnGate", {
     Description = "Returns to saved position after gate.",
     Default = false,
     Callback = function(state) AutoReturnGateEnabled = state end
+})
+
+Tabs.Position:AddToggle("AutoReturnTrialEasy", {
+    Title = "Auto Return (Trial Easy)",
+    Description = "Returns to saved position after Trial Easy.",
+    Default = false,
+    Callback = function(state) AutoReturnTrialEasyEnabled = state end
+})
+
+Tabs.Position:AddToggle("AutoReturnTrialMedium", {
+    Title = "Auto Return (Trial Medium)",
+    Description = "Returns to saved position after Trial Medium.",
+    Default = false,
+    Callback = function(state) AutoReturnTrialMediumEnabled = state end
 })
 
 Tabs.Farm:AddToggle("AutoFarm", {
@@ -748,6 +867,8 @@ task.spawn(function()
         local isAutoGateAriseEnabled = (Options.GateAutoArise and Options.GateAutoArise.Value ~= nil) and Options.GateAutoArise.Value or AutoGateAriseEnabled
         local targetLeaveRoom = tonumber(Options.LeaveRoom and Options.LeaveRoom.Value) or tonumber(LeaveRoom) or 50
         local targetLeaveGateWave = tonumber(Options.LeaveGateWave and Options.LeaveGateWave.Value) or tonumber(LeaveGateWave) or 50
+        local isAutoTrialEasyEnabled = (Options.AutoTrialEasy and Options.AutoTrialEasy.Value ~= nil) and Options.AutoTrialEasy.Value or AutoTrialEasyEnabled
+        local isAutoTrialMediumEnabled = (Options.AutoTrialMedium and Options.AutoTrialMedium.Value ~= nil) and Options.AutoTrialMedium.Value or AutoTrialMediumEnabled
 
         -- Tracking & Return Logic
         pcall(function()
@@ -755,22 +876,28 @@ task.spawn(function()
             if visibility and string.match(visibility, "^World:(%d+)$") then
                 local worldNum = string.match(visibility, "^World:(%d+)$")
                 
-                if wasInDungeon or wasInGate then
+                if wasInDungeon or wasInGate or wasInTrialEasy or wasInTrialMedium then
                     local doReturnDungeon = wasInDungeon and AutoReturnDungeonEnabled
                     local doReturnGate = wasInGate and AutoReturnGateEnabled
+                    local doReturnTrialEasy = wasInTrialEasy and AutoReturnTrialEasyEnabled
+                    local doReturnTrialMedium = wasInTrialMedium and AutoReturnTrialMediumEnabled
                     
                     wasInDungeon = false
                     wasInGate = false
+                    wasInTrialEasy = false
+                    wasInTrialMedium = false
                     saveReturnData()
                     
-                    if doReturnDungeon or doReturnGate then
+                    if doReturnDungeon or doReturnGate or doReturnTrialEasy or doReturnTrialMedium then
+                        isReturning = true
                         executeAutoReturn()
+                        isReturning = false
                     end
                 end
             end
         end)
 
-        if not isAutoDungeonEnabled and not isAutoGateEnabled then 
+        if not isAutoDungeonEnabled and not isAutoGateEnabled and not isAutoTrialEasyEnabled and not isAutoTrialMediumEnabled then 
             setStatus("Waiting (Disabled)")
             setGateStatus("Waiting (Disabled)")
             continue 
@@ -891,12 +1018,91 @@ task.spawn(function()
             end
         end)
 
+        -- Trial Environment Detection
+        local inTrialEasy = false
+        local trialEasyEnemiesFolder = nil
+        local inTrialMedium = false
+        local trialMediumEnemiesFolder = nil
+        pcall(function()
+            local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+            if visibility then
+                if visibility == "Trial:Easy" then
+                    inTrialEasy = true
+                    local arena = workspace:FindFirstChild("TimeTrialArenas")
+                    if arena then
+                        local easyArena = arena:FindFirstChild("Easy")
+                        if easyArena then
+                            trialEasyEnemiesFolder = easyArena:FindFirstChild("Enemies")
+                        end
+                    end
+                elseif visibility == "Trial:Medium" then
+                    inTrialMedium = true
+                    local arena = workspace:FindFirstChild("TimeTrialArenas")
+                    if arena then
+                        local medArena = arena:FindFirstChild("Medium")
+                        if medArena then
+                            trialMediumEnemiesFolder = medArena:FindFirstChild("Enemies")
+                        end
+                    end
+                end
+            else
+                local trialGui = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
+                if trialGui and trialGui.Enabled then
+                    local mainFrame = trialGui:FindFirstChild("Main")
+                    if mainFrame and mainFrame.Visible then
+                        local arena = workspace:FindFirstChild("TimeTrialArenas")
+                        if arena then
+                            local easyArena = arena:FindFirstChild("Easy")
+                            if easyArena and easyArena:FindFirstChild("Enemies") and #easyArena.Enemies:GetChildren() > 0 then
+                                inTrialEasy = true
+                                trialEasyEnemiesFolder = easyArena.Enemies
+                            else
+                                local medArena = arena:FindFirstChild("Medium")
+                                if medArena and medArena:FindFirstChild("Enemies") and #medArena.Enemies:GetChildren() > 0 then
+                                    inTrialMedium = true
+                                    trialMediumEnemiesFolder = medArena.Enemies
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        pcall(function()
+            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            local notifyTrialEasy = hud and hud:FindFirstChild("Main")
+                and hud.Main:FindFirstChild("GamemodeNotify")
+                and hud.Main.GamemodeNotify:FindFirstChild("Notify_TimeTrial_Easy")
+            if notifyTrialEasy and notifyTrialEasy.Visible then
+                inTrialEasy = false
+            end
+        end)
+
+        pcall(function()
+            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            local notifyTrialMedium = hud and hud:FindFirstChild("Main")
+                and hud.Main:FindFirstChild("GamemodeNotify")
+                and hud.Main.GamemodeNotify:FindFirstChild("Notify_TimeTrial_Medium")
+            if notifyTrialMedium and notifyTrialMedium.Visible then
+                inTrialMedium = false
+            end
+        end)
+
         if inDungeon and not wasInDungeon then 
             wasInDungeon = true 
             saveReturnData()
         end
         if inGate and not wasInGate then 
             wasInGate = true 
+            saveReturnData()
+        end
+        if inTrialEasy and not wasInTrialEasy then
+            wasInTrialEasy = true
+            saveReturnData()
+        end
+        if inTrialMedium and not wasInTrialMedium then
+            wasInTrialMedium = true
             saveReturnData()
         end
 
@@ -917,6 +1123,16 @@ task.spawn(function()
                 and LocalPlayer.PlayerGui.RaidGui.Main:FindFirstChild("Wave")
             if waveLabel and waveLabel:IsA("TextLabel") then
                 currentGateWave = tonumber(waveLabel.Text:match("(%d+)")) or 0
+            end
+        end)
+
+        local currentTrialRoom = 0
+        pcall(function()
+            local trialGui = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
+            local roomLabel = trialGui and trialGui:FindFirstChild("Main")
+                and trialGui.Main:FindFirstChild("Room")
+            if roomLabel and roomLabel:IsA("TextLabel") then
+                currentTrialRoom = tonumber(roomLabel.Text:match("(%d+)")) or 0
             end
         end)
 
@@ -948,56 +1164,129 @@ task.spawn(function()
         if not isAutoGateEnabled then
             lastGateEmptyTime = tick()
         end
+        if not isAutoTrialEasyEnabled then
+            lastTrialEasyEmptyTime = tick()
+        end
+        if not isAutoTrialMediumEnabled then
+            lastTrialMediumEmptyTime = tick()
+        end
 
-        -- CAN JOIN LOGIC
-        local canJoinDungeon = true
-        if inDungeon then
-            canJoinDungeon = false
-        elseif inGate then
-            if Options.LeaveForHigherPriority.Value then
-                canJoinDungeon = (tonumber(Options.DungeonPriority.Value) or 1) < (tonumber(Options.GatePriority.Value) or 2)
+        if not inTrialEasy then
+            hasLeftTrialEasy = false
+            trialEasyEntryTime = nil
+        else
+            if not trialEasyEntryTime then
+                trialEasyEntryTime = tick()
+                lastTrialEasyEmptyTime = tick()
+            end
+        end
+
+        if not inTrialMedium then
+            hasLeftTrialMedium = false
+            trialMediumEntryTime = nil
+        else
+            if not trialMediumEntryTime then
+                trialMediumEntryTime = tick()
+                lastTrialMediumEmptyTime = tick()
+            end
+        end
+
+        -- CAN JOIN LOGIC (4-way priority)
+        local currentMinute = os.date("*t").min
+        local function isTimingActive(gamemodeKey)
+            local toggleKey = gamemodeKey .. "TimingToggle"
+            local dropKey = gamemodeKey .. "Times"
+            if Options[toggleKey] and Options[toggleKey].Value then
+                local selected = selectedMultiValues(Options[dropKey] and Options[dropKey].Value)
+                for _, timeStr in ipairs(selected) do
+                    local minStr = timeStr:match("xx:(%d+)")
+                    if minStr then
+                        local targetMin = tonumber(minStr)
+                        local diff = currentMinute - targetMin
+                        if diff < 0 then diff = diff + 60 end
+                        if diff == 0 then
+                            return true, true
+                        end
+                    end
+                end
+                return false, true
+            end
+            return false, false
+        end
+
+        local tActiveDungeon, tRestrDungeon = isTimingActive("Dungeon")
+        local tActiveGate, tRestrGate = isTimingActive("Gate")
+        local tActiveTrialEasy, tRestrTrialEasy = isTimingActive("TrialEasy")
+        local tActiveTrialMedium, tRestrTrialMedium = isTimingActive("TrialMedium")
+
+        local priorities = {
+            Dungeon = tActiveDungeon and 0 or (tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1),
+            Gate = tActiveGate and 0 or (tonumber(Options.GatePriority and Options.GatePriority.Value) or 2),
+            TrialEasy = tActiveTrialEasy and 0 or (tonumber(Options.TrialEasyPriority and Options.TrialEasyPriority.Value) or 3),
+            TrialMedium = tActiveTrialMedium and 0 or (tonumber(Options.TrialMediumPriority and Options.TrialMediumPriority.Value) or 4),
+        }
+
+        local currentMode = nil
+        if inDungeon then currentMode = "Dungeon"
+        elseif inGate then currentMode = "Gate"
+        elseif inTrialEasy then currentMode = "TrialEasy"
+        elseif inTrialMedium then currentMode = "TrialMedium"
+        end
+
+        local canJoinDungeon = not tRestrDungeon or tActiveDungeon
+        local canJoinGate = not tRestrGate or tActiveGate
+        local canJoinTrialEasy = not tRestrTrialEasy or tActiveTrialEasy
+        local canJoinTrialMedium = not tRestrTrialMedium or tActiveTrialMedium
+
+        if currentMode then
+            local currentPriority = priorities[currentMode]
+            if Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value then
+                if canJoinDungeon then canJoinDungeon = priorities.Dungeon < currentPriority end
+                if canJoinGate then canJoinGate = priorities.Gate < currentPriority end
+                if canJoinTrialEasy then canJoinTrialEasy = priorities.TrialEasy < currentPriority end
+                if canJoinTrialMedium then canJoinTrialMedium = priorities.TrialMedium < currentPriority end
             else
                 canJoinDungeon = false
-            end
-        end
-
-        local canJoinGate = true
-        if inGate then
-            canJoinGate = false
-        elseif inDungeon then
-            if Options.LeaveForHigherPriority.Value then
-                canJoinGate = (tonumber(Options.GatePriority.Value) or 2) < (tonumber(Options.DungeonPriority.Value) or 1)
-            else
                 canJoinGate = false
+                canJoinTrialEasy = false
+                canJoinTrialMedium = false
             end
         end
 
-        -- Lobby priority override: if both invites are visible in lobby, respect priority
-        if not inDungeon and not inGate then
-            local lobbyDungeonInviteVisible = false
-            local lobbyGateInviteVisible = false
+        -- Lobby priority override: if multiple invites visible, only allow highest priority
+        if not currentMode then
+            local visibleInvites = {}
             pcall(function()
                 local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
                 local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
                 if gamemodeNotify then
-                    local notifyDungeon = gamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
-                    if notifyDungeon and notifyDungeon.Visible then
-                        lobbyDungeonInviteVisible = true
-                    end
-                    local notifyGate = gamemodeNotify:FindFirstChild("Notify_Raid_World5")
-                    if notifyGate and notifyGate.Visible then
-                        lobbyGateInviteVisible = true
+                    local checks = {
+                        {name = "Notify_Dungeon_World9Dungeon", mode = "Dungeon", priority = priorities.Dungeon, enabled = isAutoDungeonEnabled and canJoinDungeon},
+                        {name = "Notify_Raid_World5", mode = "Gate", priority = priorities.Gate, enabled = isAutoGateEnabled and canJoinGate},
+                        {name = "Notify_TimeTrial_Easy", mode = "TrialEasy", priority = priorities.TrialEasy, enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
+                        {name = "Notify_TimeTrial_Medium", mode = "TrialMedium", priority = priorities.TrialMedium, enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
+                    }
+                    for _, check in ipairs(checks) do
+                        local notify = gamemodeNotify:FindFirstChild(check.name)
+                        if notify and notify.Visible and check.enabled then
+                            table.insert(visibleInvites, check)
+                        end
                     end
                 end
             end)
-            
-            if lobbyDungeonInviteVisible and lobbyGateInviteVisible then
-                local dp = tonumber(Options.DungeonPriority.Value) or 1
-                local gp = tonumber(Options.GatePriority.Value) or 2
-                if dp < gp then
-                    canJoinGate = false
-                elseif gp < dp then
-                    canJoinDungeon = false
+
+            if #visibleInvites > 1 then
+                local bestPriority = 999
+                for _, inv in ipairs(visibleInvites) do
+                    if inv.priority < bestPriority then bestPriority = inv.priority end
+                end
+                for _, inv in ipairs(visibleInvites) do
+                    if inv.priority > bestPriority then
+                        if inv.mode == "Dungeon" then canJoinDungeon = false end
+                        if inv.mode == "Gate" then canJoinGate = false end
+                        if inv.mode == "TrialEasy" then canJoinTrialEasy = false end
+                        if inv.mode == "TrialMedium" then canJoinTrialMedium = false end
+                    end
                 end
             end
         end
@@ -1018,13 +1307,25 @@ task.spawn(function()
                         setStatus("Dungeon notification detected, waiting 0.5s...")
                         task.wait(0.5)
 
-                        local gNotify = notifyGui.Main:FindFirstChild("GamemodeNotify") and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
-                        if gNotify and gNotify.Visible then
-                            local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
-                            local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
-                            if gp < dp then
-                                return
+                        local gNotify = notifyGui.Main:FindFirstChild("GamemodeNotify")
+                        local dominated = false
+                        if gNotify then
+                            local myPriority = priorities.Dungeon
+                            local otherChecks = {
+                                {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                {name = "Notify_TimeTrial_Easy", optKey = "TrialEasy", enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
+                                {name = "Notify_TimeTrial_Medium", optKey = "TrialMedium", enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
+                            }
+                            for _, check in ipairs(otherChecks) do
+                                local n = gNotify:FindFirstChild(check.name)
+                                if n and n.Visible and check.enabled and priorities[check.optKey] < myPriority then
+                                    dominated = true
+                                    break
+                                end
                             end
+                        end
+                        if dominated then
+                            return
                         end
 
                         setStatus("Clicking YES...")
@@ -1036,6 +1337,75 @@ task.spawn(function()
 
                         robustClickObject(yesBtn)
                         hasLeftDungeon = false
+                        
+                        local tl
+                        pcall(function()
+                            local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                            tl = tlGui and tlGui:FindFirstChild("TeleportLoading")
+                        end)
+                        
+                        local waitStart = tick()
+                        while tl and not tl.Visible and (tick() - waitStart < 4) do
+                            task.wait(0.05)
+                        end
+                        
+                        if tl and tl.Visible then
+                            setStatus("Waiting for loading screen...")
+                            repeat task.wait(0.05) until not tl.Visible
+                        end
+                        
+                        setStatus("Loading complete, waiting 1s...")
+                        task.wait(1)
+                    end
+                end
+            end
+        end)
+        end
+
+        if isAutoTrialEasyEnabled and canJoinTrialEasy then
+        pcall(function()
+            local notifyGui = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+            if notifyGui then
+                local notifyTrialEasy = notifyGui:FindFirstChild("Main")
+                    and notifyGui.Main:FindFirstChild("GamemodeNotify")
+                    and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_TimeTrial_Easy")
+                
+                if notifyTrialEasy and notifyTrialEasy.Visible then
+                    local yesBtn = notifyTrialEasy:FindFirstChild("Actions") and notifyTrialEasy.Actions:FindFirstChild("YES")
+                    if yesBtn then
+                        setStatus("Trial Easy notification detected, waiting 0.5s...")
+                        task.wait(0.5)
+
+                        local dominated = false
+                        local myPriority = priorities.TrialEasy
+                        pcall(function()
+                            local gamemodeNotify = notifyGui.Main:FindFirstChild("GamemodeNotify")
+                            if gamemodeNotify then
+                                local otherChecks = {
+                                    {name = "Notify_Dungeon_World9Dungeon", optKey = "Dungeon", enabled = isAutoDungeonEnabled and canJoinDungeon},
+                                    {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                    {name = "Notify_TimeTrial_Medium", optKey = "TrialMedium", enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
+                                }
+                                for _, check in ipairs(otherChecks) do
+                                    local n = gamemodeNotify:FindFirstChild(check.name)
+                                    if n and n.Visible and check.enabled and priorities[check.optKey] < myPriority then
+                                        dominated = true
+                                        break
+                                    end
+                                end
+                            end
+                        end)
+                        if dominated then return end
+
+                        setStatus("Clicking YES...")
+
+                        if AutoReturnTrialEasyEnabled then
+                            saveReturnData()
+                            task.wait(0.3)
+                        end
+
+                        robustClickObject(yesBtn)
+                        hasLeftTrialEasy = false
                         
                         local tl
                         pcall(function()
@@ -1093,13 +1463,27 @@ task.spawn(function()
                                         setGateStatus("Gate " .. rank .. " detected, waiting 0.5s...")
                                         task.wait(0.5)
 
-                                        local dNotify = notifyGui.Main:FindFirstChild("GamemodeNotify") and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
-                                        if dNotify and dNotify.Visible then
-                                            local dp = tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1
-                                            local gp = tonumber(Options.GatePriority and Options.GatePriority.Value) or 2
-                                            if dp < gp then
-                                                return
+                                        local dominated = false
+                                        local myPriority = priorities.Gate
+                                        pcall(function()
+                                            local gamemodeNotify = notifyGui.Main:FindFirstChild("GamemodeNotify")
+                                            if gamemodeNotify then
+                                                local otherChecks = {
+                                                    {name = "Notify_Dungeon_World9Dungeon", optKey = "Dungeon", enabled = isAutoDungeonEnabled and canJoinDungeon},
+                                                    {name = "Notify_TimeTrial_Easy", optKey = "TrialEasy", enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
+                                                    {name = "Notify_TimeTrial_Medium", optKey = "TrialMedium", enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
+                                                }
+                                                for _, check in ipairs(otherChecks) do
+                                                    local n = gamemodeNotify:FindFirstChild(check.name)
+                                                    if n and n.Visible and check.enabled and priorities[check.optKey] < myPriority then
+                                                        dominated = true
+                                                        break
+                                                    end
+                                                end
                                             end
+                                        end)
+                                        if dominated then
+                                            return
                                         end
 
                                         setGateStatus("Clicking YES...")
@@ -1164,6 +1548,75 @@ task.spawn(function()
             end)
         end
 
+        if isAutoTrialMediumEnabled and canJoinTrialMedium then
+            pcall(function()
+                local notifyGui = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+                if notifyGui then
+                    local notifyTrialMedium = notifyGui:FindFirstChild("Main")
+                        and notifyGui.Main:FindFirstChild("GamemodeNotify")
+                        and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_TimeTrial_Medium")
+                    
+                    if notifyTrialMedium and notifyTrialMedium.Visible then
+                        local yesBtn = notifyTrialMedium:FindFirstChild("Actions") and notifyTrialMedium.Actions:FindFirstChild("YES")
+                        if yesBtn then
+                            setStatus("Trial Medium notification detected, waiting 0.5s...")
+                            task.wait(0.5)
+
+                            local dominated = false
+                            local myPriority = priorities.TrialMedium
+                            pcall(function()
+                                local gamemodeNotify = notifyGui.Main:FindFirstChild("GamemodeNotify")
+                                if gamemodeNotify then
+                                    local otherChecks = {
+                                        {name = "Notify_Dungeon_World9Dungeon", optKey = "Dungeon", enabled = isAutoDungeonEnabled and canJoinDungeon},
+                                        {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                        {name = "Notify_TimeTrial_Easy", optKey = "TrialEasy", enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
+                                    }
+                                    for _, check in ipairs(otherChecks) do
+                                        local n = gamemodeNotify:FindFirstChild(check.name)
+                                        if n and n.Visible and check.enabled and priorities[check.optKey] < myPriority then
+                                            dominated = true
+                                            break
+                                        end
+                                    end
+                                end
+                            end)
+                            if dominated then return end
+
+                            setStatus("Clicking YES...")
+
+                            if AutoReturnTrialMediumEnabled then
+                                saveReturnData()
+                                task.wait(0.3)
+                            end
+
+                            robustClickObject(yesBtn)
+                            hasLeftTrialMedium = false
+
+                            local tl
+                            pcall(function()
+                                local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                                tl = tlGui and tlGui:FindFirstChild("TeleportLoading")
+                            end)
+                            
+                            local waitStart = tick()
+                            while tl and not tl.Visible and (tick() - waitStart < 4) do
+                                task.wait(0.05)
+                            end
+                            
+                            if tl and tl.Visible then
+                                setStatus("Waiting for loading screen...")
+                                repeat task.wait(0.05) until not tl.Visible
+                            end
+                            
+                            setStatus("Loading complete, waiting 1s...")
+                            task.wait(1)
+                        end
+                    end
+                end
+            end)
+        end
+
         if isAutoDungeonEnabled and inDungeon and dungeonEnemiesFolder then
             if hasLeftDungeon then
                 setStatus("Waiting for next dungeon (already left)...")
@@ -1206,6 +1659,48 @@ task.spawn(function()
             end, dungeonEnemiesFolder)
         elseif isAutoDungeonEnabled then
             setStatus("Waiting for Dungeon invite...")
+        end
+
+        if isAutoTrialEasyEnabled and inTrialEasy and trialEasyEnemiesFolder then
+            if hasLeftTrialEasy then
+                setStatus("Waiting for next Trial Easy (already left)...")
+            else
+                local teleportLoading
+                pcall(function()
+                    local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                    if tl then teleportLoading = tl:FindFirstChild("TeleportLoading") end
+                end)
+                if teleportLoading and teleportLoading.Visible then
+                    setStatus("Waiting for loading screen...")
+                    repeat task.wait(0.05) until not teleportLoading.Visible
+                    task.wait(1)
+                end
+
+                local isAutoLeaveTrialEasy = (Options.AutoLeaveTrialEasy and Options.AutoLeaveTrialEasy.Value ~= nil) and Options.AutoLeaveTrialEasy.Value or AutoLeaveTrialEasyEnabled
+                local targetLeaveTrialEasyRoom = tonumber(Options.LeaveTrialEasyRoom and Options.LeaveTrialEasyRoom.Value) or tonumber(LeaveTrialEasyRoom) or 50
+
+                if isAutoLeaveTrialEasy and currentTrialRoom >= targetLeaveTrialEasyRoom and currentTrialRoom > 0 then
+                    setStatus("Target Room Reached (Room " .. currentTrialRoom .. "). Leaving Trial Easy...")
+                    pcall(function()
+                        local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
+                            and LocalPlayer.PlayerGui.TrialGui:FindFirstChild("Main")
+                            and LocalPlayer.PlayerGui.TrialGui.Main:FindFirstChild("Leave")
+                        if leaveBtn then
+                            robustClickObject(leaveBtn)
+                            hasLeftTrialEasy = true
+                            task.wait(0.3)
+                        end
+                    end)
+                    continue
+                else
+                    local targets = waitForWaveSpawn(trialEasyEnemiesFolder, 5)
+                    farmEnemies(targets, "TrialEasy", currentTrialRoom > 0 and ("[Room " .. currentTrialRoom .. "]") or "", function()
+                        return (Options.AutoTrialEasy and Options.AutoTrialEasy.Value ~= nil) and Options.AutoTrialEasy.Value or AutoTrialEasyEnabled
+                    end, trialEasyEnemiesFolder)
+                end
+            end
+        elseif isAutoTrialEasyEnabled then
+            setStatus("Waiting for Trial Easy invite...")
         end
 
         if isAutoGateEnabled and inGate and gateEnemiesFolder then
@@ -1290,6 +1785,48 @@ task.spawn(function()
         elseif isAutoGateEnabled then
             setGateStatus("Waiting for Gate invite...")
         end
+
+        if isAutoTrialMediumEnabled and inTrialMedium and trialMediumEnemiesFolder then
+            if hasLeftTrialMedium then
+                setStatus("Waiting for next Trial Medium (already left)...")
+            else
+                local teleportLoading
+                pcall(function()
+                    local tl = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+                    if tl then teleportLoading = tl:FindFirstChild("TeleportLoading") end
+                end)
+                if teleportLoading and teleportLoading.Visible then
+                    setStatus("Waiting for loading screen...")
+                    repeat task.wait(0.05) until not teleportLoading.Visible
+                    task.wait(1)
+                end
+
+                local isAutoLeaveTrialMedium = (Options.AutoLeaveTrialMedium and Options.AutoLeaveTrialMedium.Value ~= nil) and Options.AutoLeaveTrialMedium.Value or AutoLeaveTrialMediumEnabled
+                local targetLeaveTrialMediumRoom = tonumber(Options.LeaveTrialMediumRoom and Options.LeaveTrialMediumRoom.Value) or tonumber(LeaveTrialMediumRoom) or 50
+
+                if isAutoLeaveTrialMedium and currentTrialRoom >= targetLeaveTrialMediumRoom and currentTrialRoom > 0 then
+                    setStatus("Target Room Reached (Room " .. currentTrialRoom .. "). Leaving Trial Medium...")
+                    pcall(function()
+                        local leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
+                            and LocalPlayer.PlayerGui.TrialGui:FindFirstChild("Main")
+                            and LocalPlayer.PlayerGui.TrialGui.Main:FindFirstChild("Leave")
+                        if leaveBtn then
+                            robustClickObject(leaveBtn)
+                            hasLeftTrialMedium = true
+                            task.wait(0.3)
+                        end
+                    end)
+                    continue
+                else
+                    local targets = waitForWaveSpawn(trialMediumEnemiesFolder, 5)
+                    farmEnemies(targets, "TrialMedium", currentTrialRoom > 0 and ("[Room " .. currentTrialRoom .. "]") or "", function()
+                        return (Options.AutoTrialMedium and Options.AutoTrialMedium.Value ~= nil) and Options.AutoTrialMedium.Value or AutoTrialMediumEnabled
+                    end, trialMediumEnemiesFolder)
+                end
+            end
+        elseif isAutoTrialMediumEnabled then
+            setStatus("Waiting for Trial Medium invite...")
+        end
         
     end
 end)
@@ -1303,7 +1840,7 @@ task.spawn(function()
             pcall(function()
                 local visibility = LocalPlayer:GetAttribute("VisibilityContext")
                 if visibility then
-                    if string.find(visibility, "^Dungeon:") or string.find(visibility, "^Raid:") then
+                    if string.find(visibility, "^Dungeon:") or string.find(visibility, "^Raid:") or string.find(visibility, "^Trial:") then
                         inDungeon = true
                     end
                 end
@@ -1312,6 +1849,14 @@ task.spawn(function()
                 pcall(function()
                     local dungeonGui = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
                     if dungeonGui and dungeonGui.Enabled and dungeonGui:FindFirstChild("Main") and dungeonGui.Main.Visible then
+                        inDungeon = true
+                    end
+                end)
+            end
+            if not inDungeon then
+                pcall(function()
+                    local trialGui = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
+                    if trialGui and trialGui.Enabled and trialGui:FindFirstChild("Main") and trialGui.Main.Visible then
                         inDungeon = true
                     end
                 end)
@@ -1326,6 +1871,10 @@ task.spawn(function()
             end
 
             if not inDungeon and not inGate then
+                if wasInDungeon or wasInGate or wasInTrialEasy or wasInTrialMedium or isReturning then
+                    task.wait(0.1)
+                    continue
+                end
                 local targets = selectedEnemyInstances()
                 if #targets > 0 then
                     local function checkFarmEnabled()
@@ -1355,7 +1904,7 @@ task.spawn(function()
     end
 end)
 
-local PRIORITY_VALUES = { "1", "2" }
+local PRIORITY_VALUES = { "1", "2", "3", "4" }
 local updatingPriority = false
 
 local DungeonPriorityDrop = Tabs.Priority:AddDropdown("DungeonPriority", {
@@ -1372,27 +1921,130 @@ local GatePriorityDrop = Tabs.Priority:AddDropdown("GatePriority", {
     Default = "2",
 })
 
-DungeonPriorityDrop:OnChanged(function(val)
-    if updatingPriority then return end
-    updatingPriority = true
-    if val == "1" then
-        GatePriorityDrop:SetValue("2")
-    elseif val == "2" then
-        GatePriorityDrop:SetValue("1")
-    end
-    updatingPriority = false
-end)
+local TrialEasyPriorityDrop = Tabs.Priority:AddDropdown("TrialEasyPriority", {
+    Title = "Trial Easy",
+    Values = PRIORITY_VALUES,
+    Multi = false,
+    Default = "3",
+})
 
-GatePriorityDrop:OnChanged(function(val)
+local TrialMediumPriorityDrop = Tabs.Priority:AddDropdown("TrialMediumPriority", {
+    Title = "Trial Medium",
+    Values = PRIORITY_VALUES,
+    Multi = false,
+    Default = "4",
+})
+
+local allPriorityDrops = {
+    {drop = DungeonPriorityDrop, key = "DungeonPriority"},
+    {drop = GatePriorityDrop, key = "GatePriority"},
+    {drop = TrialEasyPriorityDrop, key = "TrialEasyPriority"},
+    {drop = TrialMediumPriorityDrop, key = "TrialMediumPriority"},
+}
+
+local function onPriorityChanged(changedDrop, newVal)
     if updatingPriority then return end
     updatingPriority = true
-    if val == "1" then
-        DungeonPriorityDrop:SetValue("2")
-    elseif val == "2" then
-        DungeonPriorityDrop:SetValue("1")
+    for _, entry in ipairs(allPriorityDrops) do
+        if entry.drop ~= changedDrop and Options[entry.key].Value == newVal then
+            local usedValues = {}
+            for _, e in ipairs(allPriorityDrops) do
+                usedValues[Options[e.key].Value] = true
+            end
+            for _, v in ipairs(PRIORITY_VALUES) do
+                if not usedValues[v] then
+                    entry.drop:SetValue(v)
+                    break
+                end
+            end
+            break
+        end
     end
     updatingPriority = false
-end)
+end
+
+DungeonPriorityDrop:OnChanged(function(val) onPriorityChanged(DungeonPriorityDrop, val) end)
+GatePriorityDrop:OnChanged(function(val) onPriorityChanged(GatePriorityDrop, val) end)
+TrialEasyPriorityDrop:OnChanged(function(val) onPriorityChanged(TrialEasyPriorityDrop, val) end)
+TrialMediumPriorityDrop:OnChanged(function(val) onPriorityChanged(TrialMediumPriorityDrop, val) end)
+
+Tabs.Timing:AddParagraph({
+    Title = "Timing Information",
+    Content = "Select specific times (minutes) to automatically enter game modes. When timing is enabled for a mode, it will ONLY enter at the selected minutes and will temporarily override standard priorities (acting as priority 1). You cannot select the same time for multiple gamemodes to prevent conflicts."
+})
+
+local GateTimesValues = {"xx:00", "xx:10", "xx:20", "xx:30", "xx:40", "xx:50"}
+local DungeonTimesValues = {"xx:00", "xx:15", "xx:30", "xx:45"}
+local TrialEasyTimesValues = {"xx:00", "xx:30"}
+local TrialMediumTimesValues = {"xx:15", "xx:45"}
+
+Tabs.Timing:AddSection("Gate Timing")
+Tabs.Timing:AddToggle("GateTimingToggle", { Title = "Enable Gate Timing", Default = false })
+local GateTimesDrop = Tabs.Timing:AddDropdown("GateTimes", { Title = "Gate", Values = GateTimesValues, Multi = true, Default = {} })
+
+Tabs.Timing:AddSection("Dungeon Timing")
+Tabs.Timing:AddToggle("DungeonTimingToggle", { Title = "Enable Dungeon Timing", Default = false })
+local DungeonTimesDrop = Tabs.Timing:AddDropdown("DungeonTimes", { Title = "Dungeon", Values = DungeonTimesValues, Multi = true, Default = {} })
+
+Tabs.Timing:AddSection("Time Trial Easy Timing")
+Tabs.Timing:AddToggle("TrialEasyTimingToggle", { Title = "Enable Trial Easy Timing", Default = false })
+local TrialEasyTimesDrop = Tabs.Timing:AddDropdown("TrialEasyTimes", { Title = "Trial Easy", Values = TrialEasyTimesValues, Multi = true, Default = {} })
+
+Tabs.Timing:AddSection("Time Trial Medium Timing")
+Tabs.Timing:AddToggle("TrialMediumTimingToggle", { Title = "Enable Trial Medium Timing", Default = false })
+local TrialMediumTimesDrop = Tabs.Timing:AddDropdown("TrialMediumTimes", { Title = "Trial Medium", Values = TrialMediumTimesValues, Multi = true, Default = {} })
+
+local allTimingDrops = {
+    {drop = GateTimesDrop, key = "GateTimes"},
+    {drop = DungeonTimesDrop, key = "DungeonTimes"},
+    {drop = TrialEasyTimesDrop, key = "TrialEasyTimes"},
+    {drop = TrialMediumTimesDrop, key = "TrialMediumTimes"},
+}
+
+local updatingTiming = false
+local function onTimingChanged(changedDrop, newVal)
+    if updatingTiming then return end
+    updatingTiming = true
+    
+    local otherSelected = {}
+    for _, dropInfo in ipairs(allTimingDrops) do
+        if dropInfo.drop ~= changedDrop then
+            local val = (Options[dropInfo.key] and Options[dropInfo.key].Value) or {}
+            local sel = selectedMultiValues(val)
+            for _, v in ipairs(sel) do
+                otherSelected[v] = true
+            end
+        end
+    end
+    
+    local newValList = selectedMultiValues(newVal)
+    local filteredDict = {}
+    local conflict = false
+    
+    for _, v in ipairs(newValList) do
+        if otherSelected[v] then
+            conflict = true
+        else
+            filteredDict[v] = true
+        end
+    end
+    
+    if conflict then
+        Fluent:Notify({
+            Title = "Timing Conflict",
+            Content = "You selected a time that is already used by another gamemode. The conflicting time has been removed.",
+            Duration = 5
+        })
+        changedDrop:SetValue(filteredDict)
+    end
+    
+    updatingTiming = false
+end
+
+GateTimesDrop:OnChanged(function(val) onTimingChanged(GateTimesDrop, val) end)
+DungeonTimesDrop:OnChanged(function(val) onTimingChanged(DungeonTimesDrop, val) end)
+TrialEasyTimesDrop:OnChanged(function(val) onTimingChanged(TrialEasyTimesDrop, val) end)
+TrialMediumTimesDrop:OnChanged(function(val) onTimingChanged(TrialMediumTimesDrop, val) end)
 
 Tabs.Priority:AddToggle("LeaveForHigherPriority", {
     Title = "Leave for Higher Priority",
