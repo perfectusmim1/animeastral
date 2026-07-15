@@ -149,7 +149,6 @@ end
 
 local GATE_RANK_VALUES = { "E", "D", "C", "B", "A"}
 local AutoGateEnabled = false
-local AutoGateAriseEnabled = false
 local AutoLeaveGateEnabled = false
 local LeaveGateWave = 50
 
@@ -164,17 +163,6 @@ Tabs.Gate:AddDropdown("GateRanks", {
     Values = GATE_RANK_VALUES,
     Multi = true,
     Default = {},
-})
-
-Tabs.Gate:AddToggle("GateAutoArise", {
-    Title = "Auto Arise",
-    Default = false,
-    Callback = function(state)
-        AutoGateAriseEnabled = state
-        if state then
-            arisingPromptTarget = nil
-        end
-    end
 })
 
 Tabs.Gate:AddToggle("AutoLeaveGate", {
@@ -864,7 +852,6 @@ task.spawn(function()
         local isAutoGateEnabled = (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
         local isAutoLeaveEnabled = (Options.AutoLeave and Options.AutoLeave.Value ~= nil) and Options.AutoLeave.Value or AutoLeaveEnabled
         local isAutoLeaveGateEnabled = (Options.AutoLeaveGate and Options.AutoLeaveGate.Value ~= nil) and Options.AutoLeaveGate.Value or AutoLeaveGateEnabled
-        local isAutoGateAriseEnabled = (Options.GateAutoArise and Options.GateAutoArise.Value ~= nil) and Options.GateAutoArise.Value or AutoGateAriseEnabled
         local targetLeaveRoom = tonumber(Options.LeaveRoom and Options.LeaveRoom.Value) or tonumber(LeaveRoom) or 50
         local targetLeaveGateWave = tonumber(Options.LeaveGateWave and Options.LeaveGateWave.Value) or tonumber(LeaveGateWave) or 50
         local isAutoTrialEasyEnabled = (Options.AutoTrialEasy and Options.AutoTrialEasy.Value ~= nil) and Options.AutoTrialEasy.Value or AutoTrialEasyEnabled
@@ -1496,7 +1483,7 @@ task.spawn(function()
                                         robustClickObject(yesBtn)
                                         hasLeftGate = false
 
-                                        -- Wait for TeleportLoading 1
+                                        -- Wait for TeleportLoading
                                         local tl
                                         pcall(function()
                                             local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
@@ -1505,60 +1492,10 @@ task.spawn(function()
                                         local waitStart = tick()
                                         while tl and not tl.Visible and (tick() - waitStart < 4) do task.wait(0.05) end
                                         if tl and tl.Visible then
-                                            setGateStatus("Waiting for loading screen 1...")
+                                            setGateStatus("Waiting for loading screen...")
                                             repeat task.wait(0.05) until not tl.Visible
                                         end
-                                        task.wait(1)
-
-                                        -- Teleport to Portal2
-                                        pcall(function()
-                                            setGateStatus("Teleporting to Portal2...")
-                                            local portal = workspace:FindFirstChild("Worlds")
-                                                and workspace.Worlds:FindFirstChild("5")
-                                                and workspace.Worlds["5"]:FindFirstChild("Systems")
-                                                and workspace.Worlds["5"].Systems:FindFirstChild("RaidStation")
-                                                and workspace.Worlds["5"].Systems.RaidStation:FindFirstChild("ActiveGate")
-                                                and workspace.Worlds["5"].Systems.RaidStation.ActiveGate:FindFirstChild("Portal2")
-                                                
-                                            local root = getRootPart()
-                                            if portal and root then
-                                                -- Attempt to enter Portal2 up to 3 times (each attempt waits up to 2 seconds)
-                                                local entered = false
-                                                for attempt = 1, 3 do
-                                                    root.CFrame = portal.CFrame
-                                                    
-                                                    local waitStart2 = tick()
-                                                    local tl2 = nil
-                                                    while (tick() - waitStart2 < 2) do
-                                                        local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
-                                                        tl2 = tlGui and tlGui:FindFirstChild("TeleportLoading")
-                                                        if tl2 and tl2.Visible then
-                                                            entered = true
-                                                            break
-                                                        end
-                                                        task.wait(0.05)
-                                                    end
-                                                    
-                                                    if entered then
-                                                        break
-                                                    end
-                                                end
-                                                
-                                                if entered then
-                                                    setGateStatus("Waiting for loading screen 2...")
-                                                    local tlGui = LocalPlayer.PlayerGui:FindFirstChild("Windows")
-                                                    local tl2 = tlGui and tlGui:FindFirstChild("TeleportLoading")
-                                                    if tl2 then
-                                                        repeat task.wait(0.05) until not tl2.Visible
-                                                    end
-                                                else
-                                                    -- All 3 attempts failed. Teleport back to savedReturnCFrame.
-                                                    if savedReturnCFrame then
-                                                        root.CFrame = savedReturnCFrame
-                                                    end
-                                                end
-                                            end
-                                        end)
+                                        setGateStatus("Loading complete, waiting 1s...")
                                         task.wait(1)
                                     end
                                 end
@@ -1738,48 +1675,6 @@ task.spawn(function()
                         setGateStatus("Waiting for loading screen...")
                         repeat task.wait(0.05) until not teleportLoading.Visible
                         task.wait(1)
-                    end
-
-                    -- Auto Arise (Proximity Prompt)
-                    if isAutoGateAriseEnabled then
-                        pcall(function()
-                            if not arisingPromptTarget or not arisingPromptTarget.Parent or not arisingPromptTarget.Enabled then
-                                arisingPromptTarget = nil
-                                if gateEnemiesFolder then
-                                    for _, enemy in ipairs(gateEnemiesFolder:GetChildren()) do
-                                        local hrp = enemy:FindFirstChild("HumanoidRootPart")
-                                        if hrp then
-                                            local prompt = hrp:FindFirstChild("ArisePrompt")
-                                            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
-                                                arisingPromptTarget = prompt
-                                                task.spawn(function()
-                                                    local targetPrompt = arisingPromptTarget
-                                                    local root = getRootPart()
-                                                    if root then 
-                                                        root.CFrame = hrp.CFrame + Vector3.new(0, 3, 0)
-                                                    end
-                                                    
-                                                    while targetPrompt and targetPrompt.Parent and targetPrompt.Enabled do
-                                                        task.wait(0.1)
-                                                        if typeof(fireproximityprompt) == "function" then
-                                                            pcall(function() fireproximityprompt(targetPrompt, 1) end)
-                                                        else
-                                                            pcall(function()
-                                                                targetPrompt:InputHoldBegin()
-                                                                task.wait((targetPrompt.HoldDuration or 1) + 0.1)
-                                                                targetPrompt:InputHoldEnd()
-                                                            end)
-                                                        end
-                                                        task.wait(0.5)
-                                                    end
-                                                end)
-                                                break
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end)
                     end
 
                     if isAutoLeaveGateEnabled and currentGateWave >= targetLeaveGateWave and currentGateWave > 0 then
