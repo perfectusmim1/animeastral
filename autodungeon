@@ -187,6 +187,29 @@ local AutoReturnTrialMediumEnabled = false
 local function setGateStatus(text)
 end
 
+local function getGateRankIfAllowed()
+    local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
+    local notifyGate = hud and hud:FindFirstChild("Main")
+        and hud.Main:FindFirstChild("GamemodeNotify")
+        and hud.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
+    if notifyGate and notifyGate.Visible then
+        local desc = notifyGate:FindFirstChild("Description")
+        if desc and desc:IsA("TextLabel") then
+            local text = desc.Text
+            local rank = text:match("Rank ([%w]+) Gate")
+            if rank then
+                local selectedRanks = selectedMultiValues(Options.GateRanks.Value)
+                for _, r in ipairs(selectedRanks) do
+                    if r == rank then
+                        return true, rank
+                    end
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
 local HttpService = game:GetService("HttpService")
 local savedReturnWorld = nil
 local savedReturnCFrame = nil
@@ -1295,7 +1318,7 @@ task.spawn(function()
                 if gamemodeNotify then
                     local checks = {
                         {name = "Notify_Dungeon_World9Dungeon", mode = "Dungeon", priority = priorities.Dungeon, enabled = isAutoDungeonEnabled and canJoinDungeon},
-                        {name = "Notify_Raid_World5", mode = "Gate", priority = priorities.Gate, enabled = isAutoGateEnabled and canJoinGate},
+                        {name = "Notify_Raid_World5", mode = "Gate", priority = priorities.Gate, enabled = isAutoGateEnabled and canJoinGate and getGateRankIfAllowed()},
                         {name = "Notify_TimeTrial_Easy", mode = "TrialEasy", priority = priorities.TrialEasy, enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
                         {name = "Notify_TimeTrial_Medium", mode = "TrialMedium", priority = priorities.TrialMedium, enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
                     }
@@ -1345,7 +1368,7 @@ task.spawn(function()
                         if gNotify then
                             local myPriority = priorities.Dungeon
                             local otherChecks = {
-                                {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate and getGateRankIfAllowed()},
                                 {name = "Notify_TimeTrial_Easy", optKey = "TrialEasy", enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
                                 {name = "Notify_TimeTrial_Medium", optKey = "TrialMedium", enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
                             }
@@ -1416,7 +1439,7 @@ task.spawn(function()
                             if gamemodeNotify then
                                 local otherChecks = {
                                     {name = "Notify_Dungeon_World9Dungeon", optKey = "Dungeon", enabled = isAutoDungeonEnabled and canJoinDungeon},
-                                    {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                    {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate and getGateRankIfAllowed()},
                                     {name = "Notify_TimeTrial_Medium", optKey = "TrialMedium", enabled = isAutoTrialMediumEnabled and canJoinTrialMedium},
                                 }
                                 for _, check in ipairs(otherChecks) do
@@ -1473,24 +1496,10 @@ task.spawn(function()
                         and notifyGui.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
                     
                     if notifyGate and notifyGate.Visible then
-                        local desc = notifyGate:FindFirstChild("Description")
-                        if desc and desc:IsA("TextLabel") then
-                            local text = desc.Text
-                            local rank = text:match("Rank ([%w]+) Gate")
-                            if rank then
-                                local selectedRanks = selectedMultiValues(Options.GateRanks.Value)
-                                local allowed = false
-                                if #selectedRanks == 0 then
-                                    allowed = false
-                                else
-                                    for _, r in ipairs(selectedRanks) do
-                                        if r == rank then allowed = true break end
-                                    end
-                                end
-
-                                if allowed then
-                                    local yesBtn = notifyGate:FindFirstChild("Actions") and notifyGate.Actions:FindFirstChild("YES")
-                                    if yesBtn then
+                        local allowed, rank = getGateRankIfAllowed()
+                        if allowed then
+                            local yesBtn = notifyGate:FindFirstChild("Actions") and notifyGate.Actions:FindFirstChild("YES")
+                            if yesBtn then
                                         local startTime = tick()
                                         
                                         setGateStatus("Gate " .. rank .. " detected, waiting 0.5s...")
@@ -1547,8 +1556,6 @@ task.spawn(function()
                                 end
                             end
                         end
-                    end
-                end
             end)
         end
 
@@ -1573,7 +1580,7 @@ task.spawn(function()
                                 if gamemodeNotify then
                                     local otherChecks = {
                                         {name = "Notify_Dungeon_World9Dungeon", optKey = "Dungeon", enabled = isAutoDungeonEnabled and canJoinDungeon},
-                                        {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate},
+                                        {name = "Notify_Raid_World5", optKey = "Gate", enabled = isAutoGateEnabled and canJoinGate and getGateRankIfAllowed()},
                                         {name = "Notify_TimeTrial_Easy", optKey = "TrialEasy", enabled = isAutoTrialEasyEnabled and canJoinTrialEasy},
                                     }
                                     for _, check in ipairs(otherChecks) do
