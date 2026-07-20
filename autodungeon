@@ -247,17 +247,8 @@ end
 
 local function isEnemyAlive(enemy)
     if not enemy or not enemy.Parent then return false end
-    local dead = enemy:GetAttribute("EnemyDead")
-    if dead == true then return false end
-    
-    local healthReal = enemy:GetAttribute("HealthReal")
-    if type(healthReal) == "number" then
-        return healthReal > 0
-    end
-    
-    local hum = getHumanoid(enemy)
-    if not hum or hum.Health <= 0 then return false end
-    return true
+    local hr = enemy:GetAttribute("HealthReal")
+    return type(hr) == "number" and hr > 0
 end
 
 local function getCurrentWorldId()
@@ -459,6 +450,7 @@ local function MovementGoTo(targetCFrame)
 end
 
 local function executeAutoReturn()
+    pcall(disableHover)
     if not savedReturnWorld or not savedReturnCFrame then 
         return 
     end
@@ -470,7 +462,7 @@ local function executeAutoReturn()
             local teleportLoading = tl:FindFirstChild("TeleportLoading")
             if teleportLoading and teleportLoading.Visible then
                 waitForLoadingScreen(teleportLoading, setStatus)
-                task.wait(1)
+                task.wait(0.5)
             end
         end
     end)
@@ -514,7 +506,7 @@ local function executeAutoReturn()
                             repeat task.wait(0.1) until teleportLoading.Visible or (tick() - t > 5)
                             if teleportLoading.Visible then
                                 waitForLoadingScreen(teleportLoading, setStatus)
-                                task.wait(1)
+                                task.wait(0.5)
                             end
                         else
                             task.wait(4)
@@ -581,15 +573,27 @@ local function waitForLoadingScreen(teleportLoading, statusFunc, timeoutSeconds)
     until not teleportLoading.Visible or (tick() - loadingStartTime > timeoutSeconds)
 end
 
-local function optimalFarmPosition(enemies)
+local FarmHeightValue = 6
+
+local function getFarmHeightForType(typeStr)
+    if typeStr ~= "Farm" then
+        return 6
+    end
+    local val = tonumber(Options.FarmHeight and Options.FarmHeight.Value)
+    if val then return val end
+    return FarmHeightValue or 6
+end
+
+local function optimalFarmPosition(enemies, typeStr)
     local positions3D = {}
     for _, e in ipairs(enemies) do
         local cf = getObjectCFrame(e)
         if cf then table.insert(positions3D, cf.Position) end
     end
     if #positions3D == 0 then return nil, 0 end
+    local h = getFarmHeightForType(typeStr)
     if #positions3D == 1 then
-        return CFrame.new(positions3D[1] + Vector3.new(0, 3, 0)), 1
+        return CFrame.new(positions3D[1] + Vector3.new(0, h, 0)), 1
     end
 
     local range = getPlayerRange()
@@ -607,7 +611,7 @@ local function optimalFarmPosition(enemies)
         end
     end
     if allFit then
-        return CFrame.new(centroid + Vector3.new(0, 3, 0)), #positions3D
+        return CFrame.new(centroid + Vector3.new(0, h, 0)), #positions3D
     end
 
     local candidates = {}
@@ -652,9 +656,9 @@ local function optimalFarmPosition(enemies)
 
     if clusterCount > 0 then
         clusterCenter /= clusterCount
-        return CFrame.new(clusterCenter + Vector3.new(0, 3, 0)), clusterCount
+        return CFrame.new(clusterCenter + Vector3.new(0, h, 0)), clusterCount
     else
-        return CFrame.new(bestPos + Vector3.new(0, 3, 0)), 1
+        return CFrame.new(bestPos + Vector3.new(0, h, 0)), 1
     end
 end
 
@@ -711,7 +715,6 @@ local PositionParagraph = Tabs.Position:AddParagraph({
 
 Tabs.Position:AddButton({
     Title = "Save Current Position",
-    Description = "Manually saves your current World and Position.",
     Callback = function()
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
         local root = getRootPart()
@@ -748,28 +751,24 @@ Tabs.Position:AddButton({
 
 Tabs.Position:AddToggle("AutoReturnDungeon", {
     Title = "Auto Return (Dungeon)",
-    Description = "Returns to saved position after dungeon.",
     Default = false,
     Callback = function(state) AutoReturnDungeonEnabled = state end
 })
 
 Tabs.Position:AddToggle("AutoReturnGate", {
     Title = "Auto Return (Gate)",
-    Description = "Returns to saved position after gate.",
     Default = false,
     Callback = function(state) AutoReturnGateEnabled = state end
 })
 
 Tabs.Position:AddToggle("AutoReturnTrialEasy", {
     Title = "Auto Return (Trial Easy)",
-    Description = "Returns to saved position after Trial Easy.",
     Default = false,
     Callback = function(state) AutoReturnTrialEasyEnabled = state end
 })
 
 Tabs.Position:AddToggle("AutoReturnTrialMedium", {
     Title = "Auto Return (Trial Medium)",
-    Description = "Returns to saved position after Trial Medium.",
     Default = false,
     Callback = function(state) AutoReturnTrialMediumEnabled = state end
 })
@@ -777,7 +776,12 @@ Tabs.Position:AddToggle("AutoReturnTrialMedium", {
 Tabs.Farm:AddToggle("AutoFarm", {
     Title = "Auto Farm",
     Default = false,
-    Callback = function(state) AutoFarmEnabled = state end
+    Callback = function(state)
+        AutoFarmEnabled = state
+        if not state then
+            pcall(disableHover)
+        end
+    end
 })
 
 EnemyDropdown = Tabs.Farm:AddDropdown("EnemyDropdown", {
@@ -795,10 +799,94 @@ Tabs.Farm:AddButton({
 
 Tabs.Farm:AddToggle("PerfectPosition", {
     Title = "Perfect Position",
-    Description = "Teleports to the center of multiple enemies to hit them all.",
     Default = false,
     Callback = function(state) PerfectPositionEnabled = state end
 })
+
+local FastTeleportFarmEnabled = false
+Tabs.Farm:AddToggle("FastTeleportFarm", {
+    Title = "Fast Teleport Farm",
+    Default = false,
+    Callback = function(state) FastTeleportFarmEnabled = state end
+})
+
+local FixedHeightFarmEnabled = true
+
+local function enableHover()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not root then return end
+
+        if hum and not hum.PlatformStand then
+            hum.PlatformStand = true
+        end
+
+        local bv = root:FindFirstChild("FarmHoverVelocity")
+        if not bv then
+            bv = Instance.new("BodyVelocity")
+            bv.Name = "FarmHoverVelocity"
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Velocity = Vector3.zero
+            bv.Parent = root
+        else
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Velocity = Vector3.zero
+        end
+    end)
+end
+
+local function disableHover()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.PlatformStand then
+            hum.PlatformStand = false
+        end
+        if root then
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("BodyVelocity") and child.Name == "FarmHoverVelocity" then
+                    child:Destroy()
+                end
+            end
+        end
+    end)
+end
+
+Tabs.Farm:AddToggle("FixedHeightFarm", {
+    Title = "Fixed Height (Hover Farm)",
+    Default = false,
+    Callback = function(state)
+        FixedHeightFarmEnabled = state
+        if not state then
+            disableHover()
+        end
+    end
+})
+
+Tabs.Farm:AddSlider("FarmHeight", {
+    Title = "Farm Height",
+    Description = "",
+    Min = 1,
+    Max = 50,
+    Default = 6,
+    Rounding = 0.5,
+    Callback = function(Value)
+        FarmHeightValue = Value
+    end
+})
+
+
+local function getHoverState(typeStr)
+    if typeStr ~= "Farm" then
+        return true
+    end
+    return (Options.FixedHeightFarm and Options.FixedHeightFarm.Value ~= nil) and Options.FixedHeightFarm.Value or FixedHeightFarmEnabled
+end
 
 local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
     local statusFunc = typeStr == "Gate" and setGateStatus or setStatus
@@ -808,11 +896,45 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
         useOptimal = (Options.PerfectPosition and Options.PerfectPosition.Value ~= nil) and Options.PerfectPosition.Value or PerfectPositionEnabled
     end
     
+    local isHoverEnabled = getHoverState(typeStr)
+
     if #targets > 0 then
+        if isHoverEnabled then
+            enableHover()
+        else
+            disableHover()
+        end
+
+        local isFastTeleport = (Options.FastTeleportFarm and Options.FastTeleportFarm.Value ~= nil) and Options.FastTeleportFarm.Value or FastTeleportFarmEnabled
+        if isFastTeleport then
+            if useOptimal then
+                local tcf, coveredCount = optimalFarmPosition(targets, typeStr)
+                if tcf then
+                    local prefix = (zoneStr and zoneStr ~= "") and (zoneStr .. " ") or ""
+                    statusFunc(prefix .. "Fast Teleport (Perfect Position)")
+                    MovementGoTo(tcf)
+                    task.wait(0.01)
+                    return
+                end
+            end
+
+            for _, enemy in ipairs(targets) do
+                if not checkEnabledFunc() then break end
+                local cf = getObjectCFrame(enemy)
+                if cf then
+                    local prefix = (zoneStr and zoneStr ~= "") and (zoneStr .. " ") or ""
+                    statusFunc(prefix .. "Fast Teleport: " .. enemy.Name)
+                    MovementGoTo(cf + Vector3.new(0, getFarmHeightForType(typeStr), 0))
+                    task.wait(0.01)
+                end
+            end
+            return
+        end
+
         local initialCount = #targets
         local tcf, coveredCount = nil, 0
         if useOptimal then
-            tcf, coveredCount = optimalFarmPosition(targets)
+            tcf, coveredCount = optimalFarmPosition(targets, typeStr)
         end
         
         if tcf and coveredCount >= 2 then
@@ -823,6 +945,14 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
             
             local startTime = tick()
             while tick() - startTime < 3 and checkEnabledFunc() do
+                isHoverEnabled = getHoverState(typeStr)
+                if isHoverEnabled then
+                    enableHover()
+                    MovementGoTo(tcf)
+                else
+                    disableHover()
+                end
+
                 if folder then
                     local currentCount = 0
                     for _, e in ipairs(folder:GetChildren()) do
@@ -860,6 +990,15 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
                 end
                 
                 while isEnemyAlive(enemy) and checkEnabledFunc() do
+                    if not checkEnabledFunc() then break end
+
+                    isHoverEnabled = getHoverState(typeStr)
+                    if isHoverEnabled then
+                        enableHover()
+                    else
+                        disableHover()
+                    end
+
                     if folder then
                         local currentCount = 0
                         for _, e in ipairs(folder:GetChildren()) do
@@ -872,13 +1011,18 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
                     if cf then
                         local prefix = (zoneStr and zoneStr ~= "") and (zoneStr .. " ") or ""
                         statusFunc(prefix .. "Farming: " .. enemy.Name)
-                        MovementGoTo(cf + Vector3.new(0, 3, 0))
+                        MovementGoTo(cf + Vector3.new(0, getFarmHeightForType(typeStr), 0))
                     end
                     task.wait(0.01)
                 end
             end
         end
     else
+        if typeStr == "Farm" then
+            disableHover()
+        else
+            enableHover()
+        end
         statusFunc("Waiting for enemies or " .. string.lower(typeStr) .. " finished...")
     end
 end
@@ -954,6 +1098,7 @@ task.spawn(function()
         end)
 
         if not isAutoDungeonEnabled and not isAutoGateEnabled and not isAutoTrialEasyEnabled and not isAutoTrialMediumEnabled then 
+            pcall(disableHover)
             setStatus("Waiting (Disabled)")
             setGateStatus("Waiting (Disabled)")
             continue 
@@ -1410,8 +1555,8 @@ task.spawn(function()
                             waitForLoadingScreen(tl, setStatus)
                         end
                         
-                        setStatus("Loading complete, waiting 1s...")
-                        task.wait(1)
+                        setStatus("Loading complete, waiting 0.5s...")
+                        task.wait(0.5)
                     end
                 end
             end
@@ -1479,8 +1624,8 @@ task.spawn(function()
                             waitForLoadingScreen(tl, setStatus)
                         end
                         
-                        setStatus("Loading complete, waiting 1s...")
-                        task.wait(1)
+                        setStatus("Loading complete, waiting 0.5s...")
+                        task.wait(0.5)
                     end
                 end
             end
@@ -1550,8 +1695,8 @@ task.spawn(function()
                                             setGateStatus("Waiting for loading screen...")
                                             waitForLoadingScreen(tl, setGateStatus)
                                         end
-                                        setGateStatus("Loading complete, waiting 1s...")
-                                        task.wait(1)
+                                        setGateStatus("Loading complete, waiting 0.5s...")
+                                        task.wait(0.5)
                                     end
                                 end
                             end
@@ -1620,8 +1765,8 @@ task.spawn(function()
                                 waitForLoadingScreen(tl, setStatus)
                             end
                             
-                            setStatus("Loading complete, waiting 1s...")
-                            task.wait(1)
+                            setStatus("Loading complete, waiting 0.5s...")
+                            task.wait(0.5)
                         end
                     end
                 end
@@ -1644,7 +1789,7 @@ task.spawn(function()
             if teleportLoading and teleportLoading.Visible then
                 setStatus("Waiting for loading screen...")
                 waitForLoadingScreen(teleportLoading, setStatus)
-                task.wait(1)
+                task.wait(0.5)
             end
 
             if isAutoLeaveEnabled and currentRoom >= targetLeaveRoom and currentRoom > 0 then
@@ -1684,7 +1829,7 @@ task.spawn(function()
                 if teleportLoading and teleportLoading.Visible then
                     setStatus("Waiting for loading screen...")
                     waitForLoadingScreen(teleportLoading, setStatus)
-                    task.wait(1)
+                    task.wait(0.5)
                 end
 
                 local isAutoLeaveTrialEasy = (Options.AutoLeaveTrialEasy and Options.AutoLeaveTrialEasy.Value ~= nil) and Options.AutoLeaveTrialEasy.Value or AutoLeaveTrialEasyEnabled
@@ -1727,7 +1872,7 @@ task.spawn(function()
                     if teleportLoading and teleportLoading.Visible then
                         setGateStatus("Waiting for loading screen...")
                         waitForLoadingScreen(teleportLoading, setGateStatus)
-                        task.wait(1)
+                        task.wait(0.5)
                     end
 
                     if isAutoLeaveGateEnabled and currentGateWave >= targetLeaveGateWave and currentGateWave > 0 then
@@ -1767,7 +1912,7 @@ task.spawn(function()
                 if teleportLoading and teleportLoading.Visible then
                     setStatus("Waiting for loading screen...")
                     waitForLoadingScreen(teleportLoading, setStatus)
-                    task.wait(1)
+                    task.wait(0.5)
                 end
 
                 local isAutoLeaveTrialMedium = (Options.AutoLeaveTrialMedium and Options.AutoLeaveTrialMedium.Value ~= nil) and Options.AutoLeaveTrialMedium.Value or AutoLeaveTrialMediumEnabled
@@ -1801,7 +1946,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while task.wait() do
+    while task.wait(0.01) do
         local isAutoFarmEnabled = (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
         if isAutoFarmEnabled then
             local inDungeon = false
@@ -1841,7 +1986,7 @@ task.spawn(function()
 
             if not inDungeon and not inGate then
                 if wasInDungeon or wasInGate or wasInTrialEasy or wasInTrialMedium or isReturning then
-                    task.wait(0.1)
+                    task.wait(0.01)
                     continue
                 end
                 local targets = selectedEnemyInstances()
@@ -1866,9 +2011,17 @@ task.spawn(function()
                     end
                     farmEnemies(targets, "Farm", "", checkFarmEnabled, nil)
                 else
+                    pcall(disableHover)
                     task.wait(0.01)
                 end
             end
+        else
+            pcall(function()
+                local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+                if not visibility or string.find(visibility, "^World:") then
+                    disableHover()
+                end
+            end)
         end
     end
 end)
@@ -2022,9 +2175,38 @@ Tabs.Priority:AddToggle("LeaveForHigherPriority", {
 
 Tabs.Settings:AddToggle("AutoExecuteOnTeleport", {
     Title = "Auto Execute on Teleport",
-    Description = "Re-executes script automatically after teleporting.",
+    Description = "",
     Default = false,
 })
+
+Tabs.Settings:AddToggle("AntiAFK", {
+    Title = "Anti AFK",
+    Description = "",
+    Default = true,
+})
+
+Tabs.Settings:AddToggle("StopIfMultiplayer", {
+    Title = "Stop Script if Player Count > 1",
+    Description = "Stops and pauses all script features when more than 1 player is in the server.",
+    Default = false,
+})
+
+local VirtualUser = game:GetService("VirtualUser")
+LocalPlayer.Idled:Connect(function()
+    local opt = Options.AntiAFK
+    if opt == nil or opt.Value == true then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end
+end)
+
+local function isMultiplayerPaused()
+    local opt = Options.StopIfMultiplayer
+    if opt and opt.Value == true and #Players:GetPlayers() > 1 then
+        return true
+    end
+    return false
+end
 
 LocalPlayer.OnTeleport:Connect(function()
     if Options.AutoExecuteOnTeleport.Value then
