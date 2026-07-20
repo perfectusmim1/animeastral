@@ -888,7 +888,20 @@ local function getHoverState(typeStr)
     return (Options.FixedHeightFarm and Options.FixedHeightFarm.Value ~= nil) and Options.FixedHeightFarm.Value or FixedHeightFarmEnabled
 end
 
+local function isMultiplayerPaused()
+    local opt = Options.StopIfMultiplayer
+    if opt and opt.Value == true and #Players:GetPlayers() > 1 then
+        return true
+    end
+    return false
+end
+
 local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
+    local originalCheck = checkEnabledFunc
+    checkEnabledFunc = function()
+        if isMultiplayerPaused() then return false end
+        return originalCheck()
+    end
     local statusFunc = typeStr == "Gate" and setGateStatus or setStatus
     
     local useOptimal = true
@@ -1061,6 +1074,12 @@ end
 
 task.spawn(function()
     while task.wait(0.1) do
+        if isMultiplayerPaused() then
+            pcall(disableHover)
+            setStatus("Paused (Multiplayer)")
+            setGateStatus("Paused (Multiplayer)")
+            continue
+        end
         local isAutoDungeonEnabled = (Options.AutoDungeon and Options.AutoDungeon.Value ~= nil) and Options.AutoDungeon.Value or AutoDungeonEnabled
         local isAutoGateEnabled = (Options.AutoGate and Options.AutoGate.Value ~= nil) and Options.AutoGate.Value or AutoGateEnabled
         local isAutoLeaveEnabled = (Options.AutoLeave and Options.AutoLeave.Value ~= nil) and Options.AutoLeave.Value or AutoLeaveEnabled
@@ -1947,6 +1966,7 @@ end)
 
 task.spawn(function()
     while task.wait(0.01) do
+        if isMultiplayerPaused() then continue end
         local isAutoFarmEnabled = (Options.AutoFarm and Options.AutoFarm.Value ~= nil) and Options.AutoFarm.Value or AutoFarmEnabled
         if isAutoFarmEnabled then
             local inDungeon = false
@@ -2200,13 +2220,7 @@ LocalPlayer.Idled:Connect(function()
     end
 end)
 
-local function isMultiplayerPaused()
-    local opt = Options.StopIfMultiplayer
-    if opt and opt.Value == true and #Players:GetPlayers() > 1 then
-        return true
-    end
-    return false
-end
+
 
 LocalPlayer.OnTeleport:Connect(function()
     if Options.AutoExecuteOnTeleport.Value then
