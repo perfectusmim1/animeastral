@@ -1053,6 +1053,11 @@ local function detectTrial(difficulty)
     return inTrial, folder
 end
 
+local function isInCursedRush()
+    local vis = LocalPlayer:GetAttribute("VisibilityContext")
+    return vis ~= nil and string.find(tostring(vis), "^BossRush:CursedRush") ~= nil
+end
+
 local function detectCursedRush()
     local inCursed = false
     local arena = nil
@@ -1063,14 +1068,11 @@ local function detectCursedRush()
             inCursed = true
             local bossArenas = workspace:FindFirstChild("BossRushArenas")
             if bossArenas then
+                -- Arena adını doğrudan context'ten al (BossRush:CursedRush_X_Y -> CursedRush_X_Y),
+                -- böylece uniq id değişse bile her zaman kendi arenamız bulunur
                 local arenaName = visibility:match("^BossRush:(.+)")
                 if arenaName then
                     arena = bossArenas:FindFirstChild(arenaName)
-                end
-                if not arena then
-                    for _, a in ipairs(bossArenas:GetChildren()) do
-                        if string.find(a.Name, "^CursedRush") then arena = a; break end
-                    end
                 end
             end
         end
@@ -1584,7 +1586,7 @@ local function collectSukunaFinger(arena)
 
     -- Model arenada var olduğu sürece 4 birim üstünde hover ile bekle ve prompt'u tetikle
     while (tick() - startTime < 20) do
-        if not (Options.AutoCollectSukuna and Options.AutoCollectSukuna.Value) then
+        if not (Options.AutoCollectSukuna and Options.AutoCollectSukuna.Value) or not isInCursedRush() then
             disableHover()
             return false
         end
@@ -1661,7 +1663,10 @@ task.spawn(function()
         if #targets > 0 then
             -- "Cursed" tipi: her zaman perfect position (optimal pozisyon) + hover ile farm
             farmEnemies(targets, "Cursed", "", function()
-                return Options.AutoFarmCursed and Options.AutoFarmCursed.Value and not isCollectingSukuna
+                -- Boss rush'tan çıkılırsa farm anında durur (context kontrolü)
+                return Options.AutoFarmCursed and Options.AutoFarmCursed.Value
+                    and not isCollectingSukuna
+                    and isInCursedRush()
             end, enemiesFolder)
         else
             disableHover()
