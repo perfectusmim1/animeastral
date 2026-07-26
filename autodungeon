@@ -116,6 +116,10 @@ Tabs.Farm:AddToggle("FixedHeightFarm", { Title = "Fixed Height (Hover Farm)", De
 Tabs.Farm:AddSlider("FarmHeight", { Title = "Farm Height", Description = "", Min = 1, Max = 50, Default = 6, Rounding = 0.5, Callback = function(v) FarmHeightValue = v end })
 
 -- Cursed Tab
+Tabs.Cursed:AddParagraph({
+    Title = "Important Note",
+    Content = "For best results, set your camera to a bird's-eye (top-down) view before going AFK. This keeps the finger prompt visible on screen so it can be collected reliably."
+})
 Tabs.Cursed:AddToggle("AutoCollectSukuna", { Title = "Auto Collect Sukuna", Default = false })
 
 -- Position Tab
@@ -1531,11 +1535,21 @@ end
 
 local function triggerFingerPrompt(prompt)
     if not prompt then return false end
+    pcall(function()
+        prompt.HoldDuration = 0
+        prompt.RequiresLineOfSight = false
+        if prompt.MaxActivationDistance < 30 then prompt.MaxActivationDistance = 30 end
+    end)
     if typeof(fireproximityprompt) == "function" then
         if pcall(fireproximityprompt, prompt) then return true end
     end
+    local held = pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(0.1)
+        prompt:InputHoldEnd()
+    end)
+    if held then return true end
     local ok = pcall(function()
-        prompt.HoldDuration = 0
         VirtualInputManager:SendKeyEvent(true, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
         task.wait(0.1)
         VirtualInputManager:SendKeyEvent(false, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
@@ -1543,41 +1557,64 @@ local function triggerFingerPrompt(prompt)
     return ok
 end
 
-local function getFirstAliveMob(arena)
+local function getAliveMobs(arena)
+    local mobs = {}
     local enemies = arena and arena:FindFirstChild("Enemies")
-    if not enemies then return nil end
+    if not enemies then return mobs end
     for _, e in ipairs(enemies:GetChildren()) do
-        if isEnemyAlive(e) then return e end
+        if isEnemyAlive(e) then table.insert(mobs, e) end
     end
-    return nil
+    return mobs
+end
+
+local function getPromptTargetCFrame(finger)
+    -- Prompt'un bağlı olduğu parçayı hedefle (Cube.166 gibi), yoksa model pivotu
+    local prompt = findFingerPrompt(finger)
+    if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+        return prompt.Parent.CFrame
+    end
+    return getObjectCFrame(finger)
 end
 
 local function collectSukunaFinger(arena)
-    local finger = arena:FindFirstChild("SukunaFinger")
-    if not finger then return false end
+    if not arena:FindFirstChild("SukunaFinger") then return false end
 
-    local fingerCF = getObjectCFrame(finger)
-    if not fingerCF then return false end
-
-    -- Parmağın birkaç birim üstüne ışınlan
-    MovementGoTo(fingerCF + Vector3.new(0, 4, 0))
-    task.wait(0.2)
-
-    -- Prompt'u tetikle (E)
     local startTime = tick()
-    while finger.Parent and (tick() - startTime < 5) do
-        if not (Options.AutoCollectSukuna and Options.AutoCollectSukuna.Value) then return false end
+
+    -- Model arenada var olduğu sürece 4 birim üstünde hover ile bekle ve prompt'u tetikle
+    while (tick() - startTime < 20) do
+        if not (Options.AutoCollectSukuna and Options.AutoCollectSukuna.Value) then
+            disableHover()
+            return false
+        end
+
+        -- Modeli her turda taze bul: referans eskise bile gerçek durumu görür
+        local finger = arena:FindFirstChild("SukunaFinger")
+        if not finger or not finger.Parent then break end
+
+        -- Parmağın 4 birim üstüne, yüzü parmağa dönük ışınlan; hover ile düşme engellenir
+        local targetCF = getPromptTargetCFrame(finger)
+        if targetCF then
+            enableHover()
+            MovementGoTo(CFrame.lookAt(targetCF.Position + Vector3.new(0, 4, 0), targetCF.Position))
+        end
+
         local prompt = findFingerPrompt(finger)
         if prompt then triggerFingerPrompt(prompt) end
         task.wait(0.2)
     end
 
-    -- Toplandıktan sonra moba geri ışınlan
-    local mob = getFirstAliveMob(arena)
-    if mob then
-        local mobCF = getObjectCFrame(mob)
-        if mobCF then
-            MovementGoTo(mobCF + Vector3.new(0, 4, 0))
+    disableHover()
+
+    -- Model hâlâ arenada duruyorsa toplanmamış demektir, moba dönme
+    if arena:FindFirstChild("SukunaFinger") then return false end
+
+    -- Model gerçekten yok oldu (toplandı) -> mobların tam ortasına geri ışınlan
+    local mobs = getAliveMobs(arena)
+    if #mobs > 0 then
+        local tcf = optimalFarmPosition(mobs, "Cursed")
+        if tcf then
+            MovementGoTo(tcf)
         end
     end
     return true
