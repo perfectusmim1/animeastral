@@ -121,6 +121,7 @@ Tabs.Cursed:AddParagraph({
     Content = "For best results, set your camera to a bird's-eye (top-down) view before going AFK. This keeps the finger prompt visible on screen so it can be collected reliably."
 })
 Tabs.Cursed:AddToggle("AutoCollectSukuna", { Title = "Auto Collect Sukuna", Default = false })
+Tabs.Cursed:AddToggle("AutoFarmCursed", { Title = "Auto Farm", Default = false })
 
 -- Position Tab
 local PositionParagraph = Tabs.Position:AddParagraph({ Title = "Saved Position", Content = "World: nil\nPosition: nil" })
@@ -1637,6 +1638,34 @@ task.spawn(function()
         isCollectingSukuna = true
         pcall(function() collectSukunaFinger(arena) end)
         isCollectingSukuna = false
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════
+-- LOOP 7: CURSED RUSH - AUTO FARM (her 0.05s)
+-- ══════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if isMultiplayerPaused() then continue end
+        if isCollectingSukuna then continue end
+
+        local isEnabled = Options.AutoFarmCursed and Options.AutoFarmCursed.Value
+        if not isEnabled then continue end
+
+        local inCursed, arena = detectCursedRush()
+        if not inCursed or not arena then continue end
+
+        local enemiesFolder = arena:FindFirstChild("Enemies")
+        local targets = getAliveMobs(arena)
+        if #targets > 0 then
+            -- "Cursed" tipi: her zaman perfect position (optimal pozisyon) + hover ile farm
+            farmEnemies(targets, "Cursed", "", function()
+                return Options.AutoFarmCursed and Options.AutoFarmCursed.Value and not isCollectingSukuna
+            end, enemiesFolder)
+        else
+            disableHover()
+        end
     end
 end)
 
