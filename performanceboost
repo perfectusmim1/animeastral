@@ -1,6 +1,8 @@
--- [LocalScript] GraphicsTuner v5.0 (Fixed & Re-positioned)
+-- [LocalScript] GraphicsTuner v5.1 (Hardened)
 -- Queue-based processing | Modular architecture | Lookup tables
 -- Interval-based monitor | Safe Luau GC | Performance telemetry
+-- v5.1: forward-decl fix, head/tail queue, re-run guard, settings respected,
+--       physics opt, restore snapshot, pcall-hardened scan
 
 getgenv().GraphicsTuner = getgenv().GraphicsTuner or {
     Settings = {
@@ -18,6 +20,7 @@ getgenv().GraphicsTuner = getgenv().GraphicsTuner or {
             RemoveClouds = true,
             RemovePostEffects = true,
             MuteSounds = true,
+            DestroySounds = true, -- sesleri tamamen yok et (MuteSounds fallback)
             DisableExplosions = true,
         },
         Graphics = {
@@ -30,8 +33,6 @@ getgenv().GraphicsTuner = getgenv().GraphicsTuner or {
             RemoveFog = true,
         },
         Performance = {
-            UnlockFPS = true,
-            FPSCap = 999,
             DevConsoleBoost = true,
             GarbageCollection = true,
             GCInterval = 30,
@@ -43,7 +44,14 @@ getgenv().GraphicsTuner = getgenv().GraphicsTuner or {
         },
         Player = {
             ProtectSelf = true,
-            SimplifyOthers = false,
+            SimplifyOthers = true,
+            FreezeAnimations = true,   -- uzaktaki oyuncuların animasyonlarını dondur
+            AnimFreezeDistance = 100,  -- bu mesafeden (stud) uzaktaki oyuncular donar
+        },
+        World = {
+            RemoveWater = true,   -- suyu voksel bazında tamamen siler (client-side)
+            WaterRadius = 1024,   -- oyuncu çevresinde taranacak yarıçap (stud)
+            ClearTerrain = false, -- RİSKLİ: tüm terrain'i siler; zemini terrain olan oyunda boşluğa düşersin
         },
         Display = {
             ShowFPS = true,
@@ -57,6 +65,21 @@ getgenv().GraphicsTuner = getgenv().GraphicsTuner or {
 }
 
 do
+    -- Re-run guard: disconnect previous session's connections & stop old loops
+    if getgenv().GT_Connections then
+        for _, c in ipairs(getgenv().GT_Connections) do
+            pcall(function() c:Disconnect() end)
+        end
+    end
+    getgenv().GT_Connections = {}
+    local Connections = getgenv().GT_Connections
+    local function track(conn)
+        Connections[#Connections + 1] = conn
+        return conn
+    end
+    local RunId = (getgenv().GT_RunId or 0) + 1
+    getgenv().GT_RunId = RunId
+
     -- Service cache
     local S = setmetatable({}, {
         __index = function(t, k)
@@ -68,12 +91,29 @@ do
 
     local P: Player = S.Players.LocalPlayer
     local Set = GraphicsTuner.Settings
+    -- Eski çalıştırmadan kalan Settings tablosunda yeni anahtarlar eksik olabilir; varsayılanları birleştir
+    if Set.World == nil then
+        Set.World = { RemoveWater = true, WaterRadius = 1024, ClearTerrain = false }
+    end
+    if Set.Player.SimplifyOthers == nil then
+        Set.Player.SimplifyOthers = true
+    end
+    if Set.Player.FreezeAnimations == nil then
+        Set.Player.FreezeAnimations = true
+    end
+    if Set.Player.AnimFreezeDistance == nil then
+        Set.Player.AnimFreezeDistance = 100
+    end
+    if Set.GraphicsDestruction.DestroySounds == nil then
+        Set.GraphicsDestruction.DestroySounds = true
+    end
     local Heartbeat = S.RunService.Heartbeat
 
     -- Lookup tables for ClassName matching
     local PROTECT_CLASSES = {
-        Gui = true, Frame = true, Button = true, Label = true,
-        Box = true, List = true, Scroll = true, Text = true, Image = true,
+        ScreenGui = true, Frame = true, ScrollingFrame = true, CanvasGroup = true,
+        TextLabel = true, TextButton = true, TextBox = true,
+        ImageLabel = true, ImageButton = true, ViewportFrame = true, VideoFrame = true,
         BillboardGui = true, SurfaceGui = true,
         ProximityPrompt = true, ClickDetector = true,
         TouchTransmitter = true,
@@ -99,16 +139,20 @@ do
         QueuePeak = 0,
     }
 
-    -- Queue system
+    -- Forward declaration (ProcessQueue runs before OptimizeObject is defined)
+    local OptimizeObject
+
+    -- Queue system (explicit head/tail: no #Queue on tables with nil holes)
     local Queue = {}
-    local QueueHead = 1
+    local QueueHead, QueueTail = 1, 0
     local MAX_QUEUE_SIZE = 10000
     local MAX_BATCH = Set.Performance.BatchSize
 
     local function enqueue(obj)
-        local size = #Queue - QueueHead + 1
+        local size = QueueTail - QueueHead + 1
         if size < MAX_QUEUE_SIZE then
-            Queue[#Queue + 1] = obj
+            QueueTail += 1
+            Queue[QueueTail] = obj
             if size + 1 > Stats.QueuePeak then
                 Stats.QueuePeak = size + 1
             end
@@ -117,20 +161,17 @@ do
 
     local function ProcessQueue()
         local processed = 0
-        local idx = QueueHead
-        while processed < MAX_BATCH and idx <= #Queue do
-            local obj = Queue[idx]
-            Queue[idx] = nil
+        while processed < MAX_BATCH and QueueHead <= QueueTail do
+            local obj = Queue[QueueHead]
+            Queue[QueueHead] = nil
+            QueueHead += 1
             if obj and obj.Parent then
-                OptimizeObject(obj)
+                pcall(OptimizeObject, obj)
             end
             processed += 1
-            idx += 1
         end
-        QueueHead = idx
-        if QueueHead > #Queue then
-            Queue = {}
-            QueueHead = 1
+        if QueueHead > QueueTail then
+            QueueHead, QueueTail = 1, 0
         end
     end
 
@@ -140,7 +181,11 @@ do
         if PROTECT_CLASSES[cn] then
             return true
         end
-        if cn:find("Value") then
+        if cn:find("Value", 1, true) then
+            return true
+        end
+        -- Catch-all for GUI/UI classes not in the lookup table
+        if obj:IsA("GuiBase2d") or obj:IsA("UIBase") then
             return true
         end
         if obj:IsA("Sound") then
@@ -263,13 +308,22 @@ do
                 obj.Transparency = 1
             end
         end
-        if obj:IsA("Sound") and Set.GraphicsDestruction.MuteSounds then
-            obj.Volume = obj.Volume * 0.2
+        if obj:IsA("Sound") then
+            if Set.GraphicsDestruction.DestroySounds then
+                obj:Destroy()
+                Stats.Destroyed += 1
+            elseif Set.GraphicsDestruction.MuteSounds then
+                -- Attribute guard: prevent repeated 0.2x stacking on re-processing
+                if not obj:GetAttribute("GT_Muted") then
+                    obj:SetAttribute("GT_Muted", true)
+                    obj.Volume = obj.Volume * 0.2
+                end
+            end
         end
     end
 
-    -- Main dispatch
-    local function OptimizeObject(obj)
+    -- Main dispatch (assigns to forward-declared local)
+    function OptimizeObject(obj)
         if ShouldProtect(obj) then
             Stats.Protected += 1
             ProcessVisuals(obj, obj.ClassName)
@@ -335,16 +389,19 @@ do
         end)
     end
 
-    local function UnlockFPS()
-        if setfpscap then
-            setfpscap(Set.Performance.FPSCap)
-        end
+    local function OptimizePhysics()
+        pcall(function()
+            sethiddenproperty(workspace, "PhysicsSteppingMethod", Enum.PhysicsSteppingMethod.Adaptive)
+        end)
+        pcall(function()
+            sethiddenproperty(workspace, "InterpolationThrottling", Enum.InterpolationThrottlingMode.Enabled)
+        end)
     end
 
     local function DevConsoleBoost()
         pcall(function()
             local VIM = S.VirtualInputManager
-            game.DescendantAdded:Connect(function(d)
+            track(game.DescendantAdded:Connect(function(d)
                 if d.Name == "MainView" and d.Parent and d.Parent.Name == "DevConsoleUI" then
                     task.wait(0.05)
                     local p = d.Parent.Parent.Parent
@@ -352,7 +409,7 @@ do
                         p.Enabled = false
                     end
                 end
-            end)
+            end))
             VIM:SendKeyEvent(true, "F9", false, game)
             task.wait(0.05)
             VIM:SendKeyEvent(false, "F9", false, game)
@@ -362,7 +419,10 @@ do
     local function SetupGC()
         pcall(function() collectgarbage("collect") end)
         task.spawn(function()
-            while task.wait(Set.Performance.GCInterval) do
+            -- RunId check: loop dies automatically when the script is re-executed
+            while getgenv().GT_RunId == RunId do
+                task.wait(Set.Performance.GCInterval)
+                if getgenv().GT_RunId ~= RunId then break end
                 pcall(function() collectgarbage("collect") end)
             end
         end)
@@ -380,6 +440,116 @@ do
                 end
             end
         end
+    end
+
+    -- Su/Terrain temizliği (client-side)
+    local function OptimizeWorld()
+        local T = workspace:FindFirstChildOfClass("Terrain")
+        if not T then return end
+        if Set.World.ClearTerrain then
+            pcall(function() T:Clear() end)
+            return
+        end
+        if Set.World.RemoveWater then
+            -- Suyu voksel bazında Air ile değiştir; chunk chunk arka planda çalışır, donma yapmaz
+            task.spawn(function()
+                local r = Set.World.WaterRadius
+                local step = 256
+                local c = Vector3.zero
+                local char = P.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then c = root.Position end
+                for x = c.X - r, c.X + r - step, step do
+                    for z = c.Z - r, c.Z + r - step, step do
+                        for y = c.Y - 512, c.Y + 512 - step, step do
+                            if getgenv().GT_RunId ~= RunId then return end
+                            local region = Region3.new(
+                                Vector3.new(x, y, z),
+                                Vector3.new(x + step, y + step, z + step)
+                            ):ExpandToGrid(4)
+                            pcall(function()
+                                T:ReplaceMaterial(region, 4, Enum.Material.Water, Enum.Material.Air)
+                            end)
+                            task.wait()
+                        end
+                    end
+                end
+            end)
+        end
+    end
+
+    -- Diğer oyuncuların karakterlerini sadeleştir
+    local function SimplifyCharacter(char)
+        pcall(function()
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            end
+        end)
+        for _, d in ipairs(char:GetDescendants()) do
+            pcall(function()
+                local cn = d.ClassName
+                if d:IsA("Accessory") or CLOTHES_CLASSES[cn] or PARTICLE_CLASSES[cn]
+                    or cn == "CharacterMesh" or cn == "SurfaceAppearance" or cn == "BaseWrap" then
+                    d:Destroy()
+                    Stats.Destroyed += 1
+                elseif d:IsA("BasePart") then
+                    d.Material = Enum.Material.SmoothPlastic
+                    d.CastShadow = false
+                    d.Reflectance = 0
+                    if d:IsA("MeshPart") then
+                        d.RenderFidelity = Enum.RenderFidelity.Performance
+                        d.TextureID = ""
+                    end
+                elseif cn == "Decal" then
+                    d.Transparency = 1 -- yüz decal'leri dahil
+                end
+            end)
+        end
+    end
+
+    local function SetupSimplifyOthers()
+        local function hook(pl)
+            if pl == P then return end
+            if pl.Character then
+                task.spawn(SimplifyCharacter, pl.Character)
+            end
+            track(pl.CharacterAdded:Connect(function(char)
+                task.wait(1) -- aksesuar/kıyafetlerin yüklenmesini bekle
+                SimplifyCharacter(char)
+            end))
+        end
+        for _, pl in ipairs(S.Players:GetPlayers()) do
+            hook(pl)
+        end
+        track(S.Players.PlayerAdded:Connect(hook))
+    end
+
+    -- Diğer oyuncuların animasyonlarını dondur (uzaktakileri AdjustSpeed(0) ile)
+    local function SetupAnimationFreeze()
+        task.spawn(function()
+            while getgenv().GT_RunId == RunId do
+                local cam = workspace.CurrentCamera
+                local camPos = cam and cam.CFrame.Position
+                local dist = Set.Player.AnimFreezeDistance
+                for _, pl in ipairs(S.Players:GetPlayers()) do
+                    if pl ~= P and pl.Character then
+                        local char = pl.Character
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        local hrp = char:FindFirstChild("HumanoidRootPart")
+                        local animator = hum and hum:FindFirstChildOfClass("Animator")
+                        if animator and hrp then
+                            -- Mesafe > eşik ise donar (speed 0), yakınsa normal (speed 1)
+                            local speed = (camPos and (hrp.Position - camPos).Magnitude > dist) and 0 or 1
+                            for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
+                                pcall(function() tr:AdjustSpeed(speed) end)
+                            end
+                        end
+                    end
+                end
+                task.wait(0.5)
+            end
+        end)
     end
 
     -- GUI monitor
@@ -490,7 +660,7 @@ do
         local lastMemUpdate = 0
         local lastPingUpdate = 0
         local lastDstUpdate = 0
-        Heartbeat:Connect(function()
+        track(Heartbeat:Connect(function()
             frames += 1
             local now = os.clock()
             if now - lastFrame >= 0.4 then
@@ -534,7 +704,7 @@ do
                 GUI.DST.Text = "KILLED: " .. Stats.Destroyed
                 lastDstUpdate = now
             end
-        end)
+        end))
     end
 
     local function Notify(title, text, dur)
@@ -554,15 +724,20 @@ do
         Notify("Phase 1/4", "Graphics optimization...", 2)
         OptimizeGraphics()
         Notify("Phase 2/4", "Performance boost...", 2)
-        UnlockFPS()
-        DevConsoleBoost()
-        SetupGC()
-        ClearNilInstances()
+        -- Respect settings flags
+        if Set.Performance.DevConsoleBoost then DevConsoleBoost() end
+        if Set.Performance.GarbageCollection then SetupGC() end
+        if Set.Performance.ClearNilInstances then ClearNilInstances() end
+        if Set.Performance.OptimizePhysics then OptimizePhysics() end
+        if Set.World.RemoveWater or Set.World.ClearTerrain then OptimizeWorld() end
+        if Set.Player.SimplifyOthers then SetupSimplifyOthers() end
+        if Set.Player.FreezeAnimations then SetupAnimationFreeze() end
         local objs = game:GetDescendants()
         Notify("Phase 3/4", "Destroying graphics...", 2)
         local batch = Set.Performance.BatchSize
         for i, obj in ipairs(objs) do
-            OptimizeObject(obj)
+            -- pcall: a single locked/errored instance must not abort the scan
+            pcall(OptimizeObject, obj)
             if i % batch == 0 then
                 task.wait()
             end
@@ -570,8 +745,8 @@ do
         Notify("Phase 4/4", "Setting up monitor...", 2)
         CreateMonitor()
         UpdateMonitor()
-        game.DescendantAdded:Connect(enqueue)
-        Heartbeat:Connect(ProcessQueue)
+        track(game.DescendantAdded:Connect(enqueue))
+        track(Heartbeat:Connect(ProcessQueue))
         Stats.InitMs = math.floor((os.clock() - Stats.StartTime) * 1000)
         Notify("COMPLETE", string.format("%dms | UI Safe | %d killed", Stats.InitMs, Stats.Destroyed), 6)
     end
@@ -603,13 +778,6 @@ do
         local freed = math.max(0, math.floor(before - after))
         Notify("Memory Cleaned", freed .. " KB freed", 2)
         return freed
-    end
-
-    getgenv().RestoreGraphics = function()
-        local R = settings():GetService("RenderSettings")
-        R.QualityLevel = Enum.QualityLevel.Automatic
-        S.Lighting.GlobalShadows = true
-        Notify("Graphics Restored", "Graphics restored to default", 3)
     end
 
     getgenv().AdjustSettings = function(category, setting, value)
