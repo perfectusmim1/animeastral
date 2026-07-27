@@ -1810,12 +1810,33 @@ Tabs.Settings:AddToggle("StopIfMultiplayer", { Title = "Stop Script if Player Co
 
 Tabs.Settings:AddButton({
     Title = "FPS Boost",
-    Description = "Applies performance optimizations",
+    Description = "",
     Callback = function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/performanceboost"))()
         Fluent:Notify({ Title = "FPS Boost", Content = "Performance boost applied!", Duration = 3 })
     end
 })
+
+local Disable3DToggle = Tabs.Settings:AddToggle("Disable3DRender", {
+    Title = "Disable 3D Render",
+    Description = "",
+    Default = false
+})
+Disable3DToggle:OnChanged(function()
+    local enabled = Options.Disable3DRender.Value
+    local ok = pcall(function()
+        game:GetService("RunService"):Set3dRenderingEnabled(not enabled)
+    end)
+    if ok then
+        Fluent:Notify({
+            Title = "3D Render",
+            Content = enabled and "Disabled (screen frozen, FPS boost active)" or "Enabled",
+            Duration = 3
+        })
+    else
+        Fluent:Notify({ Title = "3D Render", Content = "Your executor doesn't support this feature", Duration = 4 })
+    end
+end)
 
 local VirtualUser = game:GetService("VirtualUser")
 task.spawn(function()
