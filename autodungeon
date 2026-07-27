@@ -1655,6 +1655,15 @@ task.spawn(function()
         local isEnabled = Options.AutoFarmCursed and Options.AutoFarmCursed.Value
         if not isEnabled then continue end
 
+        -- Teleport loading ekranı varsa bekle, o sırada farm yapma
+        local tl = getTeleportLoading()
+        if tl and tl.Visible then
+            disableHover()
+            waitForLoadingScreen(tl)
+            task.wait(0.5)
+            continue
+        end
+
         local inCursed, arena = detectCursedRush()
         if not inCursed or not arena then continue end
 
@@ -1663,7 +1672,9 @@ task.spawn(function()
         if #targets > 0 then
             -- "Cursed" tipi: her zaman perfect position (optimal pozisyon) + hover ile farm
             farmEnemies(targets, "Cursed", "", function()
-                -- Boss rush'tan çıkılırsa farm anında durur (context kontrolü)
+                -- Boss rush'tan çıkılırsa veya loading ekranı gelirse farm anında durur
+                local tl2 = getTeleportLoading()
+                if tl2 and tl2.Visible then return false end
                 return Options.AutoFarmCursed and Options.AutoFarmCursed.Value
                     and not isCollectingSukuna
                     and isInCursedRush()
@@ -1807,6 +1818,16 @@ Tabs.Settings:AddButton({
 })
 
 local VirtualUser = game:GetService("VirtualUser")
+task.spawn(function()
+    while task.wait(60) do
+        local opt = Options.AntiAFK
+        if opt == nil or opt.Value == true then
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end
+    end
+end)
+
 LocalPlayer.Idled:Connect(function()
     local opt = Options.AntiAFK
     if opt == nil or opt.Value == true then
