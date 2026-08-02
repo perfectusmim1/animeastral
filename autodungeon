@@ -313,6 +313,29 @@ local savedReturnWorld = nil
 local savedReturnCFrame = nil
 local FarmHeightValue = 6
 
+
+Tabs.Changelog:AddSection("Join Discord")
+
+Tabs.Changelog:AddParagraph({
+    Title = "Join Discord",
+    Content = "Join our Discord server for updates, support, and community!"
+})
+
+Tabs.Changelog:AddButton({
+    Title = "Copy Discord Link",
+    Description = "https://discord.gg/J8p7dPfEbV",
+    Callback = function()
+        local setclip = setclipboard or set_clipboard or (syn and syn.write_clipboard)
+        if setclip then
+            setclip("https://discord.gg/J8p7dPfEbV")
+            Fluent:Notify({ Title = "Copied!", Content = "Discord link copied to clipboard!", Duration = 3 })
+        else
+            Fluent:Notify({ Title = "Error", Content = "Clipboard function not supported by executor.", Duration = 3 })
+        end
+    end
+})
+
+
 Tabs.Changelog:AddSection("Recommended Executor")
 
 Tabs.Changelog:AddParagraph({
