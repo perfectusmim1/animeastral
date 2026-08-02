@@ -317,7 +317,7 @@ Tabs.Changelog:AddSection("Recommended Executor")
 
 Tabs.Changelog:AddParagraph({
     Title = "Recommended Executor",
-    Content = "If you want the script to run completely smoothly and prevent Roblox from crashing, try this free executor."
+    Content = "If you want the script to run completely smoothly and prevent Roblox from crashing, try this free executor. Note: If you have a low quality executor such as Xeno, some features like teleport may break in game when Auto Gate is enabled, so we recommend using this executor instead."
 })
 
 Tabs.Changelog:AddButton({
