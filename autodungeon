@@ -11,10 +11,6 @@ end
 genv.AnimeAstralExecuted = true
 genv.AnimeAstralSession = currentSession
 
--- ══════════════════════════════════════════════════════════════
--- SERVICES
--- ══════════════════════════════════════════════════════════════
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -24,10 +20,6 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
-
--- ══════════════════════════════════════════════════════════════
--- FEEDBACK CONFIG & HANDLER
--- ══════════════════════════════════════════════════════════════
 
 local ENDPOINT = "https://plua.vercel.app/api/l/B9CcLtGyEFcnTVz7b2gt/feedback"
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request
@@ -78,50 +70,40 @@ local function SendFeedback(kind, message)
     end)
 end
 
--- ══════════════════════════════════════════════════════════════
--- BALL / CROW HANDLER
--- ══════════════════════════════════════════════════════════════
-
 local BALL_HISTORY_FILE = "BallHopHistory.json"
 local BALL_COOLDOWN_TIME = 1800
-local ballServerHistory = {}
+local CROW_HISTORY_FILE = "CrowHopHistory.json"
+local CROW_COOLDOWN_TIME = 1800
+local COMMANDMENT_HISTORY_FILE = "CommandmentHopHistory.json"
+local COMMANDMENT_COOLDOWN_TIME = 1800
 
-pcall(function()
-    if isfile and isfile(BALL_HISTORY_FILE) then
-        local fileData = readfile(BALL_HISTORY_FILE)
-        if fileData and fileData ~= "" then
-            local decoded = HttpService:JSONDecode(fileData)
-            if type(decoded) == "table" then ballServerHistory = decoded end
-        end
-    end
-end)
-
-local function saveBallHistory()
-    if writefile then
-        pcall(function()
-            writefile(BALL_HISTORY_FILE, HttpService:JSONEncode(ballServerHistory))
-        end)
-    end
-end
-
-local function cleanBallHistory()
-    local currentTime = os.time()
-    for jobId, visitTime in pairs(ballServerHistory) do
-        if type(visitTime) == "number" and (currentTime - visitTime > BALL_COOLDOWN_TIME) then
-            ballServerHistory[jobId] = nil
-        end
-    end
-    saveBallHistory()
-end
-
-local function ballServerHop(statusCallback)
+local function genericServerHop(historyFile, cooldownTime, statusCallback)
     if statusCallback then statusCallback("Searching for new server...") end
     local placeId = game.PlaceId
     local currentJobId = game.JobId
-    cleanBallHistory()
+    local serverHistory = {}
+
+    pcall(function()
+        if isfile and isfile(historyFile) then
+            local fileData = readfile(historyFile)
+            if fileData and fileData ~= "" then
+                local decoded = HttpService:JSONDecode(fileData)
+                if type(decoded) == "table" then serverHistory = decoded end
+            end
+        end
+    end)
+
+    local currentTime = os.time()
+    for jobId, visitTime in pairs(serverHistory) do
+        if type(visitTime) == "number" and (currentTime - visitTime > cooldownTime) then
+            serverHistory[jobId] = nil
+        end
+    end
+    if writefile then
+        pcall(function() writefile(historyFile, HttpService:JSONEncode(serverHistory)) end)
+    end
 
     local cursor = ""
-    local foundServer = false
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 
     if not req then
@@ -129,7 +111,7 @@ local function ballServerHop(statusCallback)
         return
     end
 
-    while not foundServer do
+    while true do
         local url = string.format("https://games.roblox.com/v1/games/%s/servers/Public?sortOrder=Asc&limit=100%s", tostring(placeId), cursor ~= "" and "&cursor=" .. cursor or "")
         local success, response = pcall(function() return req({ Url = url, Method = "GET" }) end)
 
@@ -141,10 +123,7 @@ local function ballServerHop(statusCallback)
                 local validServers = {}
                 for _, server in ipairs(data.data) do
                     if server.playing < server.maxPlayers and server.id ~= currentJobId then
-                        local isOnCooldown = false
-                        if ballServerHistory[server.id] and (os.time() - ballServerHistory[server.id]) < BALL_COOLDOWN_TIME then
-                            isOnCooldown = true
-                        end
+                        local isOnCooldown = serverHistory[server.id] and (os.time() - serverHistory[server.id]) < cooldownTime
                         if not isOnCooldown then
                             table.insert(validServers, server)
                         end
@@ -153,25 +132,25 @@ local function ballServerHop(statusCallback)
 
                 if #validServers > 0 then
                     local randomServer = validServers[math.random(1, #validServers)]
-                    if statusCallback then statusCallback("Teleporting to server: " .. tostring(randomServer.id)) end
-                    ballServerHistory[currentJobId] = os.time()
-                    saveBallHistory()
-
+                    if statusCallback then statusCallback("Teleporting: " .. tostring(randomServer.id)) end
+                    serverHistory[currentJobId] = os.time()
+                    if writefile then pcall(function() writefile(historyFile, HttpService:JSONEncode(serverHistory)) end) end
                     pcall(function()
                         game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer.id, LocalPlayer)
                     end)
-                    foundServer = true
                     break
                 end
 
-                if not foundServer and data.nextPageCursor then
+                if data.nextPageCursor then
                     cursor = data.nextPageCursor
-                elseif not foundServer and not data.nextPageCursor then
-                    if statusCallback then statusCallback("Resetting server history & retrying...") end
-                    ballServerHistory = {}
-                    saveBallHistory()
+                else
+                    if statusCallback then statusCallback("Resetting history & retrying...") end
+                    serverHistory = {}
+                    if writefile then pcall(function() writefile(historyFile, HttpService:JSONEncode(serverHistory)) end) end
                     break
                 end
+            else
+                break
             end
         else
             break
@@ -180,19 +159,31 @@ local function ballServerHop(statusCallback)
     end
 end
 
-local function collectSingleBall(ballObject)
-    if not ballObject or not ballObject.Parent then return false end
+local function ballServerHop(statusCallback)
+    genericServerHop(BALL_HISTORY_FILE, BALL_COOLDOWN_TIME, statusCallback)
+end
+
+local function crowServerHop(statusCallback)
+    genericServerHop(CROW_HISTORY_FILE, CROW_COOLDOWN_TIME, statusCallback)
+end
+
+local function commandmentServerHop(statusCallback)
+    genericServerHop(COMMANDMENT_HISTORY_FILE, COMMANDMENT_COOLDOWN_TIME, statusCallback)
+end
+
+local function genericCollectItem(itemObject, promptName)
+    if not itemObject or not itemObject.Parent then return false end
 
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
     local rootPart = char and char:FindFirstChild("HumanoidRootPart")
     if not rootPart then return false end
 
-    local prompt = ballObject:FindFirstChild("BallClaimPrompt", true)
-        or ballObject:FindFirstChildWhichIsA("ProximityPrompt", true)
+    local prompt = itemObject:FindFirstChild(promptName, true)
+        or itemObject:FindFirstChildWhichIsA("ProximityPrompt", true)
     if not prompt then
         task.wait(0.5)
-        prompt = ballObject:FindFirstChild("BallClaimPrompt", true)
-            or ballObject:FindFirstChildWhichIsA("ProximityPrompt", true)
+        prompt = itemObject:FindFirstChild(promptName, true)
+            or itemObject:FindFirstChildWhichIsA("ProximityPrompt", true)
     end
     if not prompt then return false end
 
@@ -200,20 +191,19 @@ local function collectSingleBall(ballObject)
     local promptParent = prompt.Parent
     if promptParent and promptParent:IsA("BasePart") then
         targetCFrame = promptParent.CFrame
-    elseif ballObject:IsA("Model") then
-        local part = ballObject:FindFirstChildWhichIsA("BasePart", true)
-        targetCFrame = part and part.CFrame or ballObject:GetPivot()
-    elseif ballObject:IsA("BasePart") then
-        targetCFrame = ballObject.CFrame
+    elseif itemObject:IsA("Model") then
+        local part = itemObject:FindFirstChildWhichIsA("BasePart", true)
+        targetCFrame = part and part.CFrame or itemObject:GetPivot()
+    elseif itemObject:IsA("BasePart") then
+        targetCFrame = itemObject.CFrame
     end
 
     if not targetCFrame then return false end
 
-    local offset = targetCFrame.LookVector * 3 + Vector3.new(0, 2, 0)
+    local offset = promptName == "BallClaimPrompt" and (targetCFrame.LookVector * 3 + Vector3.new(0, 2, 0)) or Vector3.new(0, 2, 0)
     rootPart.CFrame = targetCFrame + offset
     rootPart.AssemblyLinearVelocity = Vector3.zero
 
-    -- ProximityPrompt ayarlarını anında aktifleştirmek için güncelle
     pcall(function()
         prompt.RequiresLineOfSight = false
         prompt.MaxActivationDistance = 9999
@@ -222,7 +212,7 @@ local function collectSingleBall(ballObject)
 
     local collected = false
     for attempt = 1, 3 do
-        if not ballObject.Parent then
+        if not itemObject.Parent then
             collected = true
             break
         end
@@ -246,11 +236,11 @@ local function collectSingleBall(ballObject)
         end
 
         local startCheck = tick()
-        while ballObject.Parent and (tick() - startCheck < 0.5) do
+        while itemObject.Parent and (tick() - startCheck < 0.5) do
             task.wait(0.05)
         end
 
-        if not ballObject.Parent then
+        if not itemObject.Parent then
             collected = true
             break
         end
@@ -259,185 +249,17 @@ local function collectSingleBall(ballObject)
     return collected
 end
 
--- ══════════════════════════════════════════════════════════════
--- CROW (CORVO) HANDLER
--- ══════════════════════════════════════════════════════════════
-
-local CROW_HISTORY_FILE = "CrowHopHistory.json"
-local CROW_COOLDOWN_TIME = 1800
-local crowServerHistory = {}
-
-pcall(function()
-    if isfile and isfile(CROW_HISTORY_FILE) then
-        local fileData = readfile(CROW_HISTORY_FILE)
-        if fileData and fileData ~= "" then
-            local decoded = HttpService:JSONDecode(fileData)
-            if type(decoded) == "table" then crowServerHistory = decoded end
-        end
-    end
-end)
-
-local function saveCrowHistory()
-    if writefile then
-        pcall(function()
-            writefile(CROW_HISTORY_FILE, HttpService:JSONEncode(crowServerHistory))
-        end)
-    end
-end
-
-local function cleanCrowHistory()
-    local currentTime = os.time()
-    for jobId, visitTime in pairs(crowServerHistory) do
-        if type(visitTime) == "number" and (currentTime - visitTime > CROW_COOLDOWN_TIME) then
-            crowServerHistory[jobId] = nil
-        end
-    end
-    saveCrowHistory()
-end
-
-local function crowServerHop(statusCallback)
-    if statusCallback then statusCallback("Searching for new server...") end
-    local placeId = game.PlaceId
-    local currentJobId = game.JobId
-    cleanCrowHistory()
-
-    local cursor = ""
-    local foundServer = false
-    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-
-    if not req then
-        if statusCallback then statusCallback("Executor lacks HTTP request support") end
-        return
-    end
-
-    while not foundServer do
-        local url = string.format("https://games.roblox.com/v1/games/%s/servers/Public?sortOrder=Asc&limit=100%s", tostring(placeId), cursor ~= "" and "&cursor=" .. cursor or "")
-        local success, response = pcall(function() return req({ Url = url, Method = "GET" }) end)
-
-        if success and response and response.Body then
-            local data
-            pcall(function() data = HttpService:JSONDecode(response.Body) end)
-
-            if data and data.data then
-                local validServers = {}
-                for _, server in ipairs(data.data) do
-                    if server.playing < server.maxPlayers and server.id ~= currentJobId then
-                        local isOnCooldown = false
-                        if crowServerHistory[server.id] and (os.time() - crowServerHistory[server.id]) < CROW_COOLDOWN_TIME then
-                            isOnCooldown = true
-                        end
-                        if not isOnCooldown then
-                            table.insert(validServers, server)
-                        end
-                    end
-                end
-
-                if #validServers > 0 then
-                    local randomServer = validServers[math.random(1, #validServers)]
-                    if statusCallback then statusCallback("Teleporting to server: " .. tostring(randomServer.id)) end
-                    crowServerHistory[currentJobId] = os.time()
-                    saveCrowHistory()
-
-                    pcall(function()
-                        game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer.id, LocalPlayer)
-                    end)
-                    foundServer = true
-                    break
-                end
-
-                if not foundServer and data.nextPageCursor then
-                    cursor = data.nextPageCursor
-                elseif not foundServer and not data.nextPageCursor then
-                    if statusCallback then statusCallback("Resetting server history & retrying...") end
-                    crowServerHistory = {}
-                    saveCrowHistory()
-                    break
-                end
-            end
-        else
-            break
-        end
-        task.wait(0.5)
-    end
+local function collectSingleBall(ballObject)
+    return genericCollectItem(ballObject, "BallClaimPrompt")
 end
 
 local function collectSingleCrow(crowObject)
-    if not crowObject or not crowObject.Parent then return false end
-
-    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-    local rootPart = char and char:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return false end
-
-    local prompt = crowObject:FindFirstChild("CorvoClaimPrompt", true)
-        or crowObject:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if not prompt then
-        task.wait(0.5)
-        prompt = crowObject:FindFirstChild("CorvoClaimPrompt", true)
-            or crowObject:FindFirstChildWhichIsA("ProximityPrompt", true)
-    end
-    if not prompt then return false end
-
-    local targetCFrame
-    if crowObject:IsA("Model") then
-        local part = crowObject:FindFirstChildWhichIsA("BasePart", true)
-        targetCFrame = part and part.CFrame or crowObject:GetPivot()
-    elseif crowObject:IsA("BasePart") then
-        targetCFrame = crowObject.CFrame
-    end
-
-    if not targetCFrame then return false end
-
-    rootPart.CFrame = targetCFrame + Vector3.new(0, 2, 0)
-    rootPart.AssemblyLinearVelocity = Vector3.zero
-
-    pcall(function()
-        prompt.RequiresLineOfSight = false
-        prompt.MaxActivationDistance = 9999
-        prompt.HoldDuration = 0
-    end)
-
-    local collected = false
-    for attempt = 1, 3 do
-        if not crowObject.Parent then
-            collected = true
-            break
-        end
-
-        task.wait(0.1)
-
-        if typeof(fireproximityprompt) == "function" then
-            pcall(fireproximityprompt, prompt)
-        else
-            pcall(function()
-                if prompt.InputHoldBegan then
-                    prompt:InputHoldBegan()
-                    task.wait(0.02)
-                    if prompt.InputHoldEnded then prompt:InputHoldEnded() end
-                else
-                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                    task.wait(0.02)
-                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                end
-            end)
-        end
-
-        local startCheck = tick()
-        while crowObject.Parent and (tick() - startCheck < 0.5) do
-            task.wait(0.05)
-        end
-
-        if not crowObject.Parent then
-            collected = true
-            break
-        end
-    end
-
-    return collected
+    return genericCollectItem(crowObject, "CorvoClaimPrompt")
 end
 
--- ══════════════════════════════════════════════════════════════
--- UI LIBRARY
--- ══════════════════════════════════════════════════════════════
+local function collectSingleCommandment(commandmentObject)
+    return genericCollectItem(commandmentObject, "CommandmentClaimPrompt")
+end
 
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/dist/main.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/Pluent/main/Addons/SaveManager.lua"))()
@@ -463,7 +285,7 @@ local Tabs = {
     Cursed = Window:AddTab({ Title = "Cursed Rush", Icon = "skull" }),
     Raids = Window:AddTab({ Title = "Raids", Icon = "landmark" }),
     Defense = Window:AddTab({ Title = "Defense", Icon = "shield" }),
-    BallCrow = Window:AddTab({ Title = "Ball / Crow", Icon = "disc" }),
+    BallCrow = Window:AddTab({ Title = "Command / Ball / Crow", Icon = "disc" }),
     Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
     Timing = Window:AddTab({ Title = "Timing", Icon = "clock" }),
     Position = Window:AddTab({ Title = "Position", Icon = "map-pin" }),
@@ -472,22 +294,18 @@ local Tabs = {
 
 local Options = Fluent.Options
 
--- ══════════════════════════════════════════════════════════════
--- SHARED STATE
--- ══════════════════════════════════════════════════════════════
-
 local State = {
     currentMode = nil,
     enemiesFolder = nil,
     currentRoom = 0,
     currentWave = 0,
     currentTrialRoom = 0,
-    wasIn = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false },
-    hasLeft = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false },
-    entryTime = { Dungeon = nil, Gate = nil, TrialEasy = nil, TrialMedium = nil, TombRaid = nil, SoulRaid = nil, BeachDefense = nil, CloverRaid = nil, InfinityCastle = nil, TitanDefense = nil, TimelessRaid = nil, CursedRush = nil, KingCursesRush = nil, NinjaRaid = nil },
+    wasIn = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TrialHard = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false, SinsRaid = false },
+    hasLeft = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TrialHard = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false, SinsRaid = false },
+    entryTime = { Dungeon = nil, Gate = nil, TrialEasy = nil, TrialMedium = nil, TrialHard = nil, TombRaid = nil, SoulRaid = nil, BeachDefense = nil, CloverRaid = nil, InfinityCastle = nil, TitanDefense = nil, TimelessRaid = nil, CursedRush = nil, KingCursesRush = nil, NinjaRaid = nil, SinsRaid = nil },
     isReturning = false,
-    priorities = { Dungeon = 1, Gate = 2, TrialEasy = 3, TrialMedium = 4, TombRaid = 5, SoulRaid = 6, BeachDefense = 7, CloverRaid = 8, InfinityCastle = 9, TitanDefense = 10, TimelessRaid = 11, CursedRush = 12, KingCursesRush = 13, NinjaRaid = 14 },
-    canJoin = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false },
+    priorities = { Dungeon = 1, Gate = 2, TrialEasy = 3, TrialMedium = 4, TombRaid = 5, SoulRaid = 6, BeachDefense = 7, CloverRaid = 8, InfinityCastle = 9, TitanDefense = 10, TimelessRaid = 11, CursedRush = 12, KingCursesRush = 13, NinjaRaid = 14, SinsRaid = 15, TrialHard = 16 },
+    canJoin = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TrialHard = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false, SinsRaid = false },
     isJoining = false,
 }
 
@@ -495,11 +313,38 @@ local savedReturnWorld = nil
 local savedReturnCFrame = nil
 local FarmHeightValue = 6
 
--- ══════════════════════════════════════════════════════════════
--- UI ELEMENTS
--- ══════════════════════════════════════════════════════════════
+Tabs.Changelog:AddSection("Recommended Executor")
 
--- Changelog Tab
+Tabs.Changelog:AddParagraph({
+    Title = "Recommended Executor",
+    Content = "If you want the script to run completely smoothly and prevent Roblox from crashing, try this free executor."
+})
+
+Tabs.Changelog:AddButton({
+    Title = "Copy Link",
+    Description = "https://projectreal.gg",
+    Callback = function()
+        local setclip = setclipboard or set_clipboard or (syn and syn.write_clipboard)
+        if setclip then
+            setclip("https://projectreal.gg")
+            Fluent:Notify({ Title = "Copied!", Content = "Executor link copied to clipboard!", Duration = 3 })
+        else
+            Fluent:Notify({ Title = "Error", Content = "Clipboard function not supported by executor.", Duration = 3 })
+        end
+    end
+})
+
+Tabs.Changelog:AddSection("Version 1.2")
+Tabs.Changelog:AddParagraph({
+    Title = "Version 1.2",
+    Content = "--- Added ---\n" ..
+              "• Sins Raid Added\n" ..
+              "• Time Trial Hard Added\n" ..
+              "• Commandment Collector Added\n" ..
+              "• Auto Server Hop (Commandment) Added"
+})
+
+Tabs.Changelog:AddSection("Version 1.1")
 Tabs.Changelog:AddParagraph({
     Title = "Version 1.1",
     Content = "--- Fixed ---\n" ..
@@ -508,6 +353,7 @@ Tabs.Changelog:AddParagraph({
               "• Gate now uses Bridge event listener (works even with popups disabled)."
 })
 
+Tabs.Changelog:AddSection("Version 1.0")
 Tabs.Changelog:AddParagraph({
     Title = "Version 1.0",
     Content = "Welcome to Anime Astral v1.0!\n\n" ..
@@ -544,7 +390,6 @@ Tabs.Changelog:AddParagraph({
               "• Mob selection not saving\n\n"
 })
 
--- Feedback Tab
 local BugSection = Tabs.Feedback:AddSection("Bug report")
 local BugInput = BugSection:AddInput("BugInput", {
     Title = "Submit",
@@ -565,8 +410,16 @@ SuggestSection:AddButton({
     Callback = function() SendFeedback("suggestion", SuggestInput.Value) end,
 })
 
--- Ball / Crow Tab
-local SectionBall = Tabs.BallCrow:AddSection("Auto Collect Ball")
+Tabs.BallCrow:AddSection("Commandments")
+Tabs.BallCrow:AddToggle("AutoCollectCommandments", { Title = "Auto Collect Commandments", Default = false })
+Tabs.BallCrow:AddToggle("AutoCommandmentServerHop", { Title = "Auto Server Hop (Commandment)", Default = false })
+
+local CommandmentStatusParagraph = Tabs.BallCrow:AddParagraph({
+    Title = "Commandment Collector Status",
+    Content = "Status: Idle\nDetected: 0 | Collected: 0 | Skipped: 0"
+})
+
+Tabs.BallCrow:AddSection("Auto Collect Ball")
 Tabs.BallCrow:AddToggle("AutoCollectBall", { Title = "Auto Collect Ball", Default = false })
 Tabs.BallCrow:AddToggle("AutoBallServerHop", { Title = "Auto Server Hop (Ball)", Default = false })
 
@@ -575,7 +428,7 @@ local BallStatusParagraph = Tabs.BallCrow:AddParagraph({
     Content = "Status: Idle\nDetected: 0 | Collected: 0 | Skipped: 0"
 })
 
-local SectionCrow = Tabs.BallCrow:AddSection("Auto Collect Crow")
+Tabs.BallCrow:AddSection("Auto Collect Crow")
 Tabs.BallCrow:AddToggle("AutoCollectCrow", { Title = "Auto Collect Crow", Default = false })
 Tabs.BallCrow:AddToggle("AutoCrowServerHop", { Title = "Auto Server Hop (Crow)", Default = false })
 
@@ -584,78 +437,76 @@ local CrowStatusParagraph = Tabs.BallCrow:AddParagraph({
     Content = "Status: Idle\nDetected: 0 | Collected: 0 | Skipped: 0"
 })
 
--- Dungeon Tab
 Tabs.Main:AddToggle("AutoDungeon", { Title = "Auto Dungeon", Default = false })
 Tabs.Main:AddToggle("AutoLeave", { Title = "Auto Leave", Default = false })
 Tabs.Main:AddSlider("LeaveRoom", { Title = "Leave Room", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
--- Trial Tab
-local SectionTrialEasy = Tabs.Trial:AddSection("Time Trial Easy")
+Tabs.Trial:AddSection("Time Trial Easy")
 Tabs.Trial:AddToggle("AutoTrialEasy", { Title = "Auto Trial", Default = false })
 Tabs.Trial:AddToggle("AutoLeaveTrialEasy", { Title = "Auto Leave", Default = false })
 Tabs.Trial:AddSlider("LeaveTrialEasyRoom", { Title = "Leave Room", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
-local SectionTrialMedium = Tabs.Trial:AddSection("Time Trial Medium")
+Tabs.Trial:AddSection("Time Trial Medium")
 Tabs.Trial:AddToggle("AutoTrialMedium", { Title = "Auto Trial", Default = false })
 Tabs.Trial:AddToggle("AutoLeaveTrialMedium", { Title = "Auto Leave", Default = false })
 Tabs.Trial:AddSlider("LeaveTrialMediumRoom", { Title = "Leave Room", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
--- Gate Tab
+Tabs.Trial:AddSection("Time Trial Hard")
+Tabs.Trial:AddToggle("AutoTrialHard", { Title = "Auto Trial", Default = false })
+Tabs.Trial:AddToggle("AutoLeaveTrialHard", { Title = "Auto Leave", Default = false })
+Tabs.Trial:AddSlider("LeaveTrialHardRoom", { Title = "Leave Room", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
+
 local GATE_RANK_VALUES = { "E", "D", "C", "B", "A" }
 Tabs.Gate:AddToggle("AutoGate", { Title = "Auto Gate", Default = false })
 Tabs.Gate:AddDropdown("GateRanks", { Title = "Select Ranks", Values = GATE_RANK_VALUES, Multi = true, Default = {} })
 Tabs.Gate:AddToggle("AutoLeaveGate", { Title = "Auto Leave Gate", Default = false })
 Tabs.Gate:AddSlider("LeaveGateWave", { Title = "Leave Wave", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
--- Tomb Raid Tab
-local SectionTombRaid = Tabs.Raids:AddSection("Tomb Raid")
+Tabs.Raids:AddSection("Sins Raid")
+Tabs.Raids:AddToggle("AutoSinsRaid", { Title = "Auto Sins Raid", Default = false })
+Tabs.Raids:AddToggle("AutoLeaveSinsRaid", { Title = "Auto Leave", Default = false })
+Tabs.Raids:AddSlider("LeaveSinsRaidWave", { Title = "Leave Wave", Min = 1, Max = 100, Default = 100, Rounding = 0.1 })
+
+Tabs.Raids:AddSection("Tomb Raid")
 Tabs.Raids:AddToggle("AutoTombRaid", { Title = "Auto Tomb Raid", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveTombRaid", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveTombRaidWave", { Title = "Leave Wave", Min = 1, Max = 100, Default = 50, Rounding = 0.1 })
 
--- Soul Raid Tab
-local SectionSoulRaid = Tabs.Raids:AddSection("Soul Raid")
+Tabs.Raids:AddSection("Soul Raid")
 Tabs.Raids:AddToggle("AutoSoulRaid", { Title = "Auto Soul Raid", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveSoulRaid", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveSoulRaidWave", { Title = "Leave Wave", Min = 1, Max = 60, Default = 50, Rounding = 0.1 })
 
--- Clover Raid
-local SectionCloverRaid = Tabs.Raids:AddSection("Clover Raid")
+Tabs.Raids:AddSection("Clover Raid")
 Tabs.Raids:AddToggle("AutoCloverRaid", { Title = "Auto Clover Raid", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveCloverRaid", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveCloverRaidWave", { Title = "Leave Wave", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
--- Infinity Castle
-local SectionInfinityCastle = Tabs.Raids:AddSection("Infinity Castle")
+Tabs.Raids:AddSection("Infinity Castle")
 Tabs.Raids:AddToggle("AutoInfinityCastle", { Title = "Auto Infinity Castle", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveInfinityCastle", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveInfinityCastleWave", { Title = "Leave Wave", Min = 1, Max = 30, Default = 30, Rounding = 0.1 })
 
--- Timeless Raid
-local SectionTimelessRaid = Tabs.Raids:AddSection("Timeless Raid")
+Tabs.Raids:AddSection("Timeless Raid")
 Tabs.Raids:AddToggle("AutoTimelessRaid", { Title = "Auto Timeless Raid", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveTimelessRaid", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveTimelessRaidWave", { Title = "Leave Wave", Min = 1, Max = 50, Default = 50, Rounding = 0.1 })
 
--- Ninja Raid
-local SectionNinjaRaid = Tabs.Raids:AddSection("Ninja Raid")
+Tabs.Raids:AddSection("Ninja Raid")
 Tabs.Raids:AddToggle("AutoNinjaRaid", { Title = "Auto Ninja Raid", Default = false })
 Tabs.Raids:AddToggle("AutoLeaveNinjaRaid", { Title = "Auto Leave", Default = false })
 Tabs.Raids:AddSlider("LeaveNinjaRaidWave", { Title = "Leave Wave", Min = 1, Max = 100, Default = 100, Rounding = 0.1 })
 
--- Beach Defense
-local SectionBeachDefense = Tabs.Defense:AddSection("Beach Defense")
+Tabs.Defense:AddSection("Beach Defense")
 Tabs.Defense:AddToggle("AutoBeachDefense", { Title = "Auto Beach Defense", Default = false })
 Tabs.Defense:AddToggle("AutoLeaveBeachDefense", { Title = "Auto Leave", Default = false })
 Tabs.Defense:AddSlider("LeaveBeachDefenseWave", { Title = "Leave Wave", Min = 1, Max = 100, Default = 100, Rounding = 0.1 })
 
--- Titan Defense
-local SectionTitanDefense = Tabs.Defense:AddSection("Titan Defense")
+Tabs.Defense:AddSection("Titan Defense")
 Tabs.Defense:AddToggle("AutoTitanDefense", { Title = "Auto Titan Defense", Default = false })
 Tabs.Defense:AddToggle("AutoLeaveTitanDefense", { Title = "Auto Leave", Default = false })
 Tabs.Defense:AddSlider("LeaveTitanDefenseWave", { Title = "Leave Wave", Min = 1, Max = 100, Default = 100, Rounding = 0.1 })
 
--- Farm Tab
 Tabs.Farm:AddToggle("AutoFarm", { Title = "Auto Farm", Default = false })
 local EnemyDropdown = Tabs.Farm:AddDropdown("EnemyDropdown", { Title = "Select Enemies", Values = { "--" }, Multi = true, Default = {} })
 Tabs.Farm:AddButton({ Title = "Refresh Enemies", Description = "", Callback = function() pcall(refreshEnemies) end })
@@ -664,21 +515,19 @@ Tabs.Farm:AddToggle("FastTeleportFarm", { Title = "Fast Teleport Farm", Default 
 Tabs.Farm:AddToggle("FixedHeightFarm", { Title = "Fixed Height (Hover Farm)", Default = false })
 Tabs.Farm:AddSlider("FarmHeight", { Title = "Farm Height", Description = "", Min = 1, Max = 50, Default = 6, Rounding = 0.5, Callback = function(v) FarmHeightValue = v end })
 
--- Cursed Tab
 Tabs.Cursed:AddToggle("AutoFarmCursed", { Title = "Auto Farm", Default = false })
 Tabs.Cursed:AddToggle("AutoCollectSukuna", { Title = "Auto Collect Fingers", Default = false })
 
-local SectionCursedRush = Tabs.Cursed:AddSection("Cursed Rush")
+Tabs.Cursed:AddSection("Cursed Rush")
 Tabs.Cursed:AddToggle("AutoCursedRush", { Title = "Auto Cursed Rush", Default = false })
 Tabs.Cursed:AddToggle("AutoLeaveCursedRush", { Title = "Auto Leave", Default = false })
 Tabs.Cursed:AddSlider("LeaveCursedRushWave", { Title = "Leave Wave", Min = 1, Max = 300, Default = 300, Rounding = 0 })
 
-local SectionKingCursesRush = Tabs.Cursed:AddSection("King of Curses Rush")
+Tabs.Cursed:AddSection("King of Curses Rush")
 Tabs.Cursed:AddToggle("AutoKingCursesRush", { Title = "Auto King of Curses Rush", Default = false })
 Tabs.Cursed:AddToggle("AutoLeaveKingCursesRush", { Title = "Auto Leave", Default = false })
 Tabs.Cursed:AddSlider("LeaveKingCursesRushWave", { Title = "Leave Wave", Min = 1, Max = 300, Default = 300, Rounding = 0 })
 
--- Position Tab
 local PositionParagraph = Tabs.Position:AddParagraph({ Title = "Saved Position", Content = "World: nil\nPosition: nil" })
 
 Tabs.Position:AddButton({
@@ -713,10 +562,7 @@ Tabs.Position:AddToggle("AutoReturnDungeon", { Title = "Auto Return (Dungeon)", 
 Tabs.Position:AddToggle("AutoReturnGate", { Title = "Auto Return (Gate)", Default = false })
 Tabs.Position:AddToggle("AutoReturnTrialEasy", { Title = "Auto Return (Trial Easy)", Default = false })
 Tabs.Position:AddToggle("AutoReturnTrialMedium", { Title = "Auto Return (Trial Medium)", Default = false })
-
--- ══════════════════════════════════════════════════════════════
--- UTILITY FUNCTIONS
--- ══════════════════════════════════════════════════════════════
+Tabs.Position:AddToggle("AutoReturnTrialHard", { Title = "Auto Return (Trial Hard)", Default = false })
 
 local function selectedMultiValues(value)
     local selected = {}
@@ -963,35 +809,6 @@ local function isMultiplayerPaused()
     return false
 end
 
-local function getGateRankIfAllowed()
-    local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-    local notifyGate = hud and hud:FindFirstChild("Main")
-        and hud.Main:FindFirstChild("GamemodeNotify")
-        and hud.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
-    if notifyGate and notifyGate.Visible then
-        local desc = notifyGate:FindFirstChild("Description")
-        if desc and desc:IsA("TextLabel") then
-            local text = desc.Text
-            local rank = text:match("Rank ([%w]+) Gate")
-            if rank then
-                local selectedRanks = selectedMultiValues(Options.GateRanks.Value)
-                for _, r in ipairs(selectedRanks) do
-                    if r == rank then return true, rank end
-                end
-            end
-        end
-    end
-    return false, nil
-end
-
--- ══════════════════════════════════════════════════════════════
--- TOMB RAID REMOTES
--- BridgeNet2 byte identifier'ları ("\xA8" gibi) her sunucu/oturum ve
--- güncellemede yeniden atanır; sabit değer kullanmak scripti bozar.
--- Bu yüzden identifier, bridge ADİNDAN (isimler oyun kaynak kodunda sabittir)
--- runtime'da dinamik olarak çözülür.
--- ══════════════════════════════════════════════════════════════
-
 local function getBridgeFolder()
     return ReplicatedStorage:FindFirstChild("BridgeNet2")
 end
@@ -1001,14 +818,10 @@ local function getBridgeEvent()
     return bridge and bridge:FindFirstChild("dataRemoteEvent")
 end
 
--- BridgeNet2 identifier haritasını çıkar (isim -> byte id)
--- Bu oyun identifier'ları attribute/StringValue olarak SAKLAMIYOR;
--- bu yüzden client modülünün belleğindeki tablolar getgc ile taranır.
 function buildBridgeIdentifierMap()
     local map = {}
     local folder = getBridgeFolder()
 
-    -- Yöntem 1: attribute / StringValue (bazı BridgeNet2 sürümleri için)
     if folder then
         for name, value in pairs(folder:GetAttributes()) do
             if type(value) == "string" then map[name] = value end
@@ -1020,8 +833,6 @@ function buildBridgeIdentifierMap()
         end
     end
 
-    -- Yöntem 2: bellekteki identifier tablolarını tara
-    -- (isim -> kısa byte id veya tersi şeklindeki string tabloları aranır)
     if typeof(getgc) == "function" then
         local ok, gc = pcall(getgc, true)
         if ok and type(gc) == "table" then
@@ -1061,7 +872,6 @@ function buildBridgeIdentifierMap()
     return map
 end
 
--- Genel bridge identifier çözümleyici (tüm modlar için)
 local cachedBridgeMap = nil
 local BridgeNet2Module = nil
 
@@ -1078,12 +888,11 @@ local function getBridgeNet2Module()
 end
 
 local function resolveBridgeId(bridgeName)
-    -- 1. Cache kontrol
+
     if cachedBridgeMap and cachedBridgeMap[bridgeName] then
         return cachedBridgeMap[bridgeName]
     end
 
-    -- Xeno executor tespiti: getgc tablo döndürmez, direkt ReferenceIdentifier kullan
     local isXeno = false
     if typeof(getgc) == "function" then
         local testOk, testGc = pcall(getgc, true)
@@ -1097,7 +906,7 @@ local function resolveBridgeId(bridgeName)
     end
 
     if not isXeno then
-        -- 2. getgc ile harita oluştur
+
         if not cachedBridgeMap then
             cachedBridgeMap = buildBridgeIdentifierMap()
         end
@@ -1106,7 +915,6 @@ local function resolveBridgeId(bridgeName)
         if not cachedBridgeMap then cachedBridgeMap = {} end
     end
 
-    -- 3. Fallback: ReferenceIdentifier (Xeno veya getgc başarısız)
     local bn2 = getBridgeNet2Module()
     if bn2 and bn2.ReferenceIdentifier then
         local ok, id = pcall(bn2.ReferenceIdentifier, bridgeName, 5)
@@ -1119,7 +927,62 @@ local function resolveBridgeId(bridgeName)
     return nil
 end
 
--- Remote ile join fonksiyonları
+local GateBridgeOpen = false
+local GateBridgeRank = nil
+local GateBridgeTime = 0
+local GateBridgeHooked = false
+
+local function hookGateBridge()
+    if GateBridgeHooked then return end
+    GateBridgeHooked = true
+    task.spawn(function()
+        pcall(function()
+            local libWorld = ReplicatedStorage:WaitForChild("SimpleWorld", 5)
+            local libObj = libWorld and libWorld:WaitForChild("Library", 5)
+            if not libObj then return end
+            local Library = require(libObj)
+            if not Library or not Library.getBridge then return end
+
+            local RaidAnnouncement = Library.getBridge("RaidAnnouncement")
+            if not RaidAnnouncement then return end
+
+            RaidAnnouncement:Connect(function(data)
+                if type(data) == "table" and data.NotifyKind == "GamemodeOpen" and data.GateTeleport == true then
+                    GateBridgeOpen = true
+                    GateBridgeRank = data.GateRank
+                    GateBridgeTime = tick()
+                end
+            end)
+        end)
+    end)
+end
+
+local KNOWN_BRIDGES = {
+    "DungeonJoin",
+    "RaidGateTeleport",
+    "TimeTrialJoin",
+    "RaidJoin",
+    "DefenseJoin",
+    "BossRushJoin",
+    "RequestChangeWorld"
+}
+
+local function preloadAllBridges()
+    task.spawn(function()
+        pcall(function()
+            if not cachedBridgeMap then
+                cachedBridgeMap = buildBridgeIdentifierMap() or {}
+            end
+            for _, bName in ipairs(KNOWN_BRIDGES) do
+                resolveBridgeId(bName)
+            end
+        end)
+        pcall(hookGateBridge)
+    end)
+end
+
+preloadAllBridges()
+
 local function fireJoinDungeon()
     local event = getBridgeEvent()
     local id = resolveBridgeId("DungeonJoin")
@@ -1161,211 +1024,39 @@ local function fireJoinTrialMedium()
     return true
 end
 
-local function fireTombRaidCreate()
+local function fireJoinTrialHard()
     local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({
-            Title = "Tomb Raid",
-            Content = "RaidJoin bridge id could not be resolved! Make sure your executor supports getgc.",
-            Duration = 6
-        })
-        return false
-    end
-
+    local id = resolveBridgeId("TimeTrialJoin")
+    if not event or not id then return false end
     event:FireServer({
-        {
-            __BridgeTuplePayload__ = true,
-            Payload = {
-                "Create",
-                "World1Aldedo",
-                true,
-                n = 3
-            }
-        },
+        { __BridgeTuplePayload__ = true, Payload = { "Join", "Hard", n = 2 } },
+        id
+    })
+    return true
+end
+
+local function fireCreateGamemode(bridgeName, tuplePayload)
+    local event = getBridgeEvent()
+    local bridgeId = resolveBridgeId(bridgeName)
+    if not event or not bridgeId then return false end
+    event:FireServer({
+        { __BridgeTuplePayload__ = true, Payload = tuplePayload },
         bridgeId
     })
     return true
 end
 
-local function fireSoulRaidCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({
-            Title = "Soul Raid",
-            Content = "RaidJoin bridge id could not be resolved! Make sure your executor supports getgc.",
-            Duration = 6
-        })
-        return false
-    end
-
-    event:FireServer({
-        {
-            __BridgeTuplePayload__ = true,
-            Payload = {
-                "Create",
-                "World10",
-                true,
-                n = 3
-            }
-        },
-        bridgeId
-    })
-    return true
-end
-
-local function fireBeachDefenseCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("DefenseJoin")
-    if not bridgeId then
-        Fluent:Notify({
-            Title = "Beach Defense",
-            Content = "DefenseJoin bridge id could not be resolved!",
-            Duration = 6
-        })
-        return false
-    end
-
-    event:FireServer({
-        {
-            __BridgeTuplePayload__ = true,
-            Payload = {
-                "Create",
-                "World8",
-                true,
-                n = 3
-            }
-        },
-        bridgeId
-    })
-    return true
-end
-
-local function fireCloverRaidCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Clover Raid", Content = "RaidJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "World7", true, n = 3 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireInfinityCastleCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Infinity Castle", Content = "RaidJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "World6", true, n = 3 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireTitanDefenseCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("DefenseJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Titan Defense", Content = "DefenseJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "World4", true, n = 3 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireTimelessRaidCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Timeless Raid", Content = "RaidJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "World0", true, n = 3 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireNinjaRaidCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("RaidJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Ninja Raid", Content = "RaidJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "World1", true, n = 3 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireCursedRushCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("BossRushJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "Cursed Rush", Content = "BossRushJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "CursedRush", "V1", true, n = 4 } },
-        bridgeId
-    })
-    return true
-end
-
-local function fireKingCursesRushCreate()
-    local event = getBridgeEvent()
-    if not event then return false end
-
-    local bridgeId = resolveBridgeId("BossRushJoin")
-    if not bridgeId then
-        Fluent:Notify({ Title = "King of Curses Rush", Content = "BossRushJoin bridge id could not be resolved!", Duration = 6 })
-        return false
-    end
-
-    event:FireServer({
-        { __BridgeTuplePayload__ = true, Payload = { "Create", "CursedRush", "V2", true, n = 4 } },
-        bridgeId
-    })
-    return true
-end
+local function fireTombRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World1Aldedo", true, n = 3 }) end
+local function fireSoulRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World10", true, n = 3 }) end
+local function fireBeachDefenseCreate() return fireCreateGamemode("DefenseJoin", { "Create", "World8", true, n = 3 }) end
+local function fireCloverRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World7", true, n = 3 }) end
+local function fireInfinityCastleCreate() return fireCreateGamemode("RaidJoin", { "Create", "World6", true, n = 3 }) end
+local function fireTitanDefenseCreate() return fireCreateGamemode("DefenseJoin", { "Create", "World4", true, n = 3 }) end
+local function fireTimelessRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World0", true, n = 3 }) end
+local function fireNinjaRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World1", true, n = 3 }) end
+local function fireSinsRaidCreate() return fireCreateGamemode("RaidJoin", { "Create", "World12", true, n = 3 }) end
+local function fireCursedRushCreate() return fireCreateGamemode("BossRushJoin", { "Create", "CursedRush", "V1", true, n = 4 }) end
+local function fireKingCursesRushCreate() return fireCreateGamemode("BossRushJoin", { "Create", "CursedRush", "V2", true, n = 4 }) end
 
 local function isTombRaidContext(visibility)
     return visibility ~= nil and string.find(tostring(visibility), "^Raid:World1Aldedo") ~= nil
@@ -1391,6 +1082,10 @@ local function isNinjaRaidContext(visibility)
     return visibility ~= nil and string.find(tostring(visibility), "^Raid:World1_") ~= nil
 end
 
+local function isSinsRaidContext(visibility)
+    return visibility ~= nil and string.find(tostring(visibility), "^Raid:World12") ~= nil
+end
+
 local function isCursedRushContext(visibility)
     return visibility ~= nil and string.find(tostring(visibility), "^BossRush:CursedRush") ~= nil
 end
@@ -1402,10 +1097,6 @@ end
 local function isInfinityCastleContext(visibility)
     return visibility ~= nil and string.find(tostring(visibility), "^Raid:World6") ~= nil
 end
-
--- ══════════════════════════════════════════════════════════════
--- LOADING SCREEN
--- ══════════════════════════════════════════════════════════════
 
 local function waitForLoadingScreen(teleportLoading, timeoutSeconds)
     if not teleportLoading or not teleportLoading.Visible then return end
@@ -1448,16 +1139,12 @@ end
 
 local function waitForTeleportComplete()
     local tl = getTeleportLoading()
-    if not tl then task.wait(4); return end
+    if not tl then task.wait(0.5); return end
     local waitStart = tick()
-    while tl and not tl.Visible and (tick() - waitStart < 4) do task.wait(0.05) end
+    while tl and not tl.Visible and (tick() - waitStart < 3) do task.wait(0.05) end
     if tl and tl.Visible then waitForLoadingScreen(tl) end
-    task.wait(0.5)
+    task.wait(0.2)
 end
-
--- ══════════════════════════════════════════════════════════════
--- HOVER SYSTEM
--- ══════════════════════════════════════════════════════════════
 
 local function enableHover()
     pcall(function()
@@ -1509,10 +1196,6 @@ local function getFarmHeightForType(typeStr)
     if val then return val end
     return FarmHeightValue or 6
 end
-
--- ══════════════════════════════════════════════════════════════
--- FARM ALGORITHM
--- ══════════════════════════════════════════════════════════════
 
 local function optimalFarmPosition(enemies, typeStr)
     local positions3D = {}
@@ -1781,10 +1464,6 @@ local function farmEnemies(targets, typeStr, zoneStr, checkEnabledFunc, folder)
     end
 end
 
--- ══════════════════════════════════════════════════════════════
--- SAVE / LOAD RETURN DATA
--- ══════════════════════════════════════════════════════════════
-
 function saveReturnData()
     local data = {
         world = savedReturnWorld,
@@ -1813,7 +1492,6 @@ end
 
 loadReturnData()
 
--- Kaydedilmiş pozisyonu UI'da göster (execute sonrası nil görünmesin)
 pcall(function()
     if savedReturnWorld or savedReturnCFrame then
         local worldStr = savedReturnWorld and tostring(savedReturnWorld) or "nil"
@@ -1844,7 +1522,7 @@ local function executeAutoReturn()
     if currentVis == targetVis then
         MovementGoTo(savedReturnCFrame)
     else
-        -- Remote ile world değiştir (RequestChangeWorld)
+
         local worldNum = tonumber(savedReturnWorld)
         if worldNum ~= nil then
             local bridgeId = resolveBridgeId("RequestChangeWorld")
@@ -1864,14 +1542,9 @@ local function executeAutoReturn()
     end
 end
 
--- ══════════════════════════════════════════════════════════════
--- ENVIRONMENT DETECTION HELPERS
--- ══════════════════════════════════════════════════════════════
-
 local function detectDungeon()
     local inDungeon = false
     local folder = nil
-
     pcall(function()
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
         if visibility and string.find(visibility, "^Dungeon:") then
@@ -1879,9 +1552,8 @@ local function detectDungeon()
             local dungeonArenas = workspace:FindFirstChild("DungeonArenas")
             if dungeonArenas then
                 local worldName = visibility:match("^Dungeon:(.+)")
-                if worldName then
-                    local w = dungeonArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
+                if worldName and dungeonArenas:FindFirstChild(worldName) then
+                    folder = dungeonArenas[worldName]:FindFirstChild("Enemies")
                 end
                 if not folder then
                     for _, arena in ipairs(dungeonArenas:GetChildren()) do
@@ -1906,43 +1578,32 @@ local function detectDungeon()
             end
         end
     end)
-
-    pcall(function()
-        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-        local notify = hud and hud:FindFirstChild("Main")
-            and hud.Main:FindFirstChild("GamemodeNotify")
-            and hud.Main.GamemodeNotify:FindFirstChild("Notify_Dungeon_World9Dungeon")
-        if notify and notify.Visible then inDungeon = false end
-    end)
-
     return inDungeon, folder
 end
 
 local function detectGate()
     local inGate = false
     local folder = nil
-
     pcall(function()
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        -- Tomb Raid ve Soul Raid context'i Gate ile karışmasın (hepsi RaidGui kullanıyor)
         if isTombRaidContext(visibility) then return end
         if isSoulRaidContext(visibility) then return end
         if isCloverRaidContext(visibility) then return end
         if isInfinityCastleContext(visibility) then return end
         if isTimelessRaidContext(visibility) then return end
         if isNinjaRaidContext(visibility) then return end
+        if isSinsRaidContext(visibility) then return end
         if visibility and string.find(visibility, "^Raid:") then
             inGate = true
             local raidArenas = workspace:FindFirstChild("RaidArenas")
             if raidArenas then
                 local worldName = visibility:match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
+                if worldName and raidArenas:FindFirstChild(worldName) then
+                    folder = raidArenas[worldName]:FindFirstChild("Enemies")
                 end
                 if not folder then
                     for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if not string.find(arena.Name, "^World1Aldedo") and not string.find(arena.Name, "^World10") and not string.find(arena.Name, "^World7") and not string.find(arena.Name, "^World6") and not string.find(arena.Name, "^World0") and not string.find(arena.Name, "^World1_") then
+                        if not string.find(arena.Name, "^World1Aldedo") and not string.find(arena.Name, "^World10") and not string.find(arena.Name, "^World7") and not string.find(arena.Name, "^World6") and not string.find(arena.Name, "^World0") and not string.find(arena.Name, "^World1_") and not string.find(arena.Name, "^World12") then
                             local ef = arena:FindFirstChild("Enemies")
                             if ef then folder = ef; break end
                         end
@@ -1957,7 +1618,7 @@ local function detectGate()
                     local raidArenas = workspace:FindFirstChild("RaidArenas")
                     if raidArenas then
                         for _, arena in ipairs(raidArenas:GetChildren()) do
-                            if not string.find(arena.Name, "^World1Aldedo") and not string.find(arena.Name, "^World10") and arena:FindFirstChild("Enemies") then
+                            if not string.find(arena.Name, "^World1Aldedo") and not string.find(arena.Name, "^World10") and not string.find(arena.Name, "^World12") and arena:FindFirstChild("Enemies") then
                                 inGate = true; folder = arena.Enemies; break
                             end
                         end
@@ -1966,259 +1627,43 @@ local function detectGate()
             end
         end
     end)
-
-    pcall(function()
-        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-        local notify = hud and hud:FindFirstChild("Main")
-            and hud.Main:FindFirstChild("GamemodeNotify")
-            and hud.Main.GamemodeNotify:FindFirstChild("Notify_Raid_World5")
-        if notify and notify.Visible then inGate = false end
-    end)
-
     return inGate, folder
 end
 
-local function detectTombRaid()
-    local inTomb = false
-    local folder = nil
-
+local function genericDetectRaidOrDefense(contextCheckFn, containerName, prefixPattern, matchPattern)
+    local inMode, folder = false, nil
     pcall(function()
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isTombRaidContext(visibility) then
-            inTomb = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                -- Arena adını doğrudan context'ten al (Raid:World1Aldedo_X_Y -> World1Aldedo_X_Y),
-                -- böylece uniq id değişse bile her zaman kendi arenamız bulunur
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
+        if contextCheckFn(visibility) then
+            inMode = true
+            local container = workspace:FindFirstChild(containerName)
+            if container then
+                local worldName = tostring(visibility):match(prefixPattern)
+                if worldName and container:FindFirstChild(worldName) then
+                    folder = container[worldName]:FindFirstChild("Enemies")
                 end
                 if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World1Aldedo") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
+                    for _, arena in ipairs(container:GetChildren()) do
+                        if string.find(arena.Name, matchPattern) and arena:FindFirstChild("Enemies") then
+                            folder = arena.Enemies; break
                         end
                     end
                 end
             end
         end
     end)
-
-    return inTomb, folder
+    return inMode, folder
 end
 
-local function detectSoulRaid()
-    local inSoul = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isSoulRaidContext(visibility) then
-            inSoul = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World10") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inSoul, folder
-end
-
-local function detectBeachDefense()
-    local inDefense = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isBeachDefenseContext(visibility) then
-            inDefense = true
-            local defenseArenas = workspace:FindFirstChild("DefenseArenas")
-            if defenseArenas then
-                local worldName = tostring(visibility):match("^Defense:(.+)")
-                if worldName then
-                    local w = defenseArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(defenseArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World8") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inDefense, folder
-end
-
-local function detectTitanDefense()
-    local inDefense = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isTitanDefenseContext(visibility) then
-            inDefense = true
-            local defenseArenas = workspace:FindFirstChild("DefenseArenas")
-            if defenseArenas then
-                local worldName = tostring(visibility):match("^Defense:(.+)")
-                if worldName then
-                    local w = defenseArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(defenseArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World4") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inDefense, folder
-end
-
-local function detectCloverRaid()
-    local inClover = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isCloverRaidContext(visibility) then
-            inClover = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World7") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inClover, folder
-end
-
-local function detectInfinityCastle()
-    local inInfinity = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isInfinityCastleContext(visibility) then
-            inInfinity = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World6") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inInfinity, folder
-end
-
-local function detectTimelessRaid()
-    local inTimeless = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isTimelessRaidContext(visibility) then
-            inTimeless = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World0") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inTimeless, folder
-end
-
-local function detectNinjaRaid()
-    local inNinja = false
-    local folder = nil
-
-    pcall(function()
-        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
-        if isNinjaRaidContext(visibility) then
-            inNinja = true
-            local raidArenas = workspace:FindFirstChild("RaidArenas")
-            if raidArenas then
-                local worldName = tostring(visibility):match("^Raid:(.+)")
-                if worldName then
-                    local w = raidArenas:FindFirstChild(worldName)
-                    if w then folder = w:FindFirstChild("Enemies") end
-                end
-                if not folder then
-                    for _, arena in ipairs(raidArenas:GetChildren()) do
-                        if string.find(arena.Name, "^World1_") then
-                            local ef = arena:FindFirstChild("Enemies")
-                            if ef then folder = ef; break end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return inNinja, folder
-end
+local function detectTombRaid() return genericDetectRaidOrDefense(isTombRaidContext, "RaidArenas", "^Raid:(.+)", "^World1Aldedo") end
+local function detectSoulRaid() return genericDetectRaidOrDefense(isSoulRaidContext, "RaidArenas", "^Raid:(.+)", "^World10") end
+local function detectBeachDefense() return genericDetectRaidOrDefense(isBeachDefenseContext, "DefenseArenas", "^Defense:(.+)", "^World8") end
+local function detectTitanDefense() return genericDetectRaidOrDefense(isTitanDefenseContext, "DefenseArenas", "^Defense:(.+)", "^World4") end
+local function detectCloverRaid() return genericDetectRaidOrDefense(isCloverRaidContext, "RaidArenas", "^Raid:(.+)", "^World7") end
+local function detectInfinityCastle() return genericDetectRaidOrDefense(isInfinityCastleContext, "RaidArenas", "^Raid:(.+)", "^World6") end
+local function detectTimelessRaid() return genericDetectRaidOrDefense(isTimelessRaidContext, "RaidArenas", "^Raid:(.+)", "^World0") end
+local function detectNinjaRaid() return genericDetectRaidOrDefense(isNinjaRaidContext, "RaidArenas", "^Raid:(.+)", "^World1_") end
+local function detectSinsRaid() return genericDetectRaidOrDefense(isSinsRaidContext, "RaidArenas", "^Raid:(.+)", "^World12") end
 
 local function detectTrial(difficulty)
     local inTrial = false
@@ -2253,15 +1698,6 @@ local function detectTrial(difficulty)
         end
     end)
 
-    local notifyName = "Notify_TimeTrial_" .. difficulty
-    pcall(function()
-        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-        local notify = hud and hud:FindFirstChild("Main")
-            and hud.Main:FindFirstChild("GamemodeNotify")
-            and hud.Main.GamemodeNotify:FindFirstChild(notifyName)
-        if notify and notify.Visible then inTrial = false end
-    end)
-
     return inTrial, folder
 end
 
@@ -2280,8 +1716,7 @@ local function detectCursedRush()
             inCursed = true
             local bossArenas = workspace:FindFirstChild("BossRushArenas")
             if bossArenas then
-                -- Arena adını doğrudan context'ten al (BossRush:CursedRush_X_Y -> CursedRush_X_Y),
-                -- böylece uniq id değişse bile her zaman kendi arenamız bulunur
+
                 local arenaName = visibility:match("^BossRush:(.+)")
                 if arenaName then
                     arena = bossArenas:FindFirstChild(arenaName)
@@ -2344,10 +1779,6 @@ local function readCurrentTrialRoom()
     return room
 end
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 1: STATE DETECTION (her 0.3s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
     while task.wait(0.3) do
         if isMultiplayerPaused() then
@@ -2365,6 +1796,7 @@ task.spawn(function()
         local inTitanDefense, titanDefenseFolder = detectTitanDefense()
         local inTimelessRaid, timelessRaidFolder = detectTimelessRaid()
         local inNinjaRaid, ninjaRaidFolder = detectNinjaRaid()
+        local inSinsRaid, sinsRaidFolder = detectSinsRaid()
         local inCursedRush = false
         local inKingCursesRush = false
         local cursedRushFolder = nil
@@ -2372,7 +1804,7 @@ task.spawn(function()
         if bossRushVis then
             local _, arena = detectCursedRush()
             cursedRushFolder = arena and arena:FindFirstChild("Enemies")
-            -- BossRushModeId attribute'ünden V1/V2 ayrımı
+
             local modeId = nil
             if arena then
                 modeId = arena:GetAttribute("BossRushModeId")
@@ -2385,6 +1817,7 @@ task.spawn(function()
         end
         local inTrialEasy, trialEasyFolder = detectTrial("Easy")
         local inTrialMedium, trialMediumFolder = detectTrial("Medium")
+        local inTrialHard, trialHardFolder = detectTrial("Hard")
 
         if inDungeon then
             State.currentMode = "Dungeon"
@@ -2416,6 +1849,9 @@ task.spawn(function()
         elseif inNinjaRaid then
             State.currentMode = "NinjaRaid"
             State.enemiesFolder = ninjaRaidFolder
+        elseif inSinsRaid then
+            State.currentMode = "SinsRaid"
+            State.enemiesFolder = sinsRaidFolder
         elseif inCursedRush then
             State.currentMode = "CursedRush"
             State.enemiesFolder = cursedRushFolder
@@ -2428,6 +1864,9 @@ task.spawn(function()
         elseif inTrialMedium then
             State.currentMode = "TrialMedium"
             State.enemiesFolder = trialMediumFolder
+        elseif inTrialHard then
+            State.currentMode = "TrialHard"
+            State.enemiesFolder = trialHardFolder
         else
             State.currentMode = nil
             State.enemiesFolder = nil
@@ -2487,6 +1926,11 @@ task.spawn(function()
             State.entryTime.NinjaRaid = tick()
             saveReturnData()
         end
+        if inSinsRaid and not State.wasIn.SinsRaid then
+            State.wasIn.SinsRaid = true
+            State.entryTime.SinsRaid = tick()
+            saveReturnData()
+        end
         if inCursedRush and not State.wasIn.CursedRush then
             State.wasIn.CursedRush = true
             State.entryTime.CursedRush = tick()
@@ -2507,6 +1951,11 @@ task.spawn(function()
             State.entryTime.TrialMedium = tick()
             saveReturnData()
         end
+        if inTrialHard and not State.wasIn.TrialHard then
+            State.wasIn.TrialHard = true
+            State.entryTime.TrialHard = tick()
+            saveReturnData()
+        end
 
         if not inDungeon then State.hasLeft.Dungeon = false; State.entryTime.Dungeon = nil end
         if not inGate then State.hasLeft.Gate = false; State.entryTime.Gate = nil end
@@ -2518,12 +1967,13 @@ task.spawn(function()
         if not inTitanDefense then State.hasLeft.TitanDefense = false; State.entryTime.TitanDefense = nil end
         if not inTimelessRaid then State.hasLeft.TimelessRaid = false; State.entryTime.TimelessRaid = nil end
         if not inNinjaRaid then State.hasLeft.NinjaRaid = false; State.entryTime.NinjaRaid = nil end
+        if not inSinsRaid then State.hasLeft.SinsRaid = false; State.entryTime.SinsRaid = nil end
         if not inCursedRush and State.currentMode ~= "CursedRush" then State.hasLeft.CursedRush = false; State.entryTime.CursedRush = nil end
         if not inKingCursesRush and State.currentMode ~= "KingCursesRush" then State.hasLeft.KingCursesRush = false; State.entryTime.KingCursesRush = nil end
         if not inTrialEasy then State.hasLeft.TrialEasy = false; State.entryTime.TrialEasy = nil end
         if not inTrialMedium then State.hasLeft.TrialMedium = false; State.entryTime.TrialMedium = nil end
+        if not inTrialHard then State.hasLeft.TrialHard = false; State.entryTime.TrialHard = nil end
 
-        -- Priority calculation
         local currentMinute = os.date("*t").min
         local function isTimingActive(gamemodeKey)
             local toggleKey = gamemodeKey .. "TimingToggle"
@@ -2548,13 +1998,14 @@ task.spawn(function()
         local tActiveGate, tRestrGate = isTimingActive("Gate")
         local tActiveTrialEasy, tRestrTrialEasy = isTimingActive("TrialEasy")
         local tActiveTrialMedium, tRestrTrialMedium = isTimingActive("TrialMedium")
+        local tActiveTrialHard, tRestrTrialHard = isTimingActive("TrialHard")
 
         State.priorities = {
             Dungeon = tActiveDungeon and 0 or (tonumber(Options.DungeonPriority and Options.DungeonPriority.Value) or 1),
             Gate = tActiveGate and 0 or (tonumber(Options.GatePriority and Options.GatePriority.Value) or 2),
             TrialEasy = tActiveTrialEasy and 0 or (tonumber(Options.TrialEasyPriority and Options.TrialEasyPriority.Value) or 3),
             TrialMedium = tActiveTrialMedium and 0 or (tonumber(Options.TrialMediumPriority and Options.TrialMediumPriority.Value) or 4),
-            -- Tomb Raid'in timing kısıtlaması yok, sadece seçilen öncelik geçerli
+
             TombRaid = tonumber(Options.TombRaidPriority and Options.TombRaidPriority.Value) or 5,
             SoulRaid = tonumber(Options.SoulRaidPriority and Options.SoulRaidPriority.Value) or 6,
             BeachDefense = tonumber(Options.BeachDefensePriority and Options.BeachDefensePriority.Value) or 7,
@@ -2565,6 +2016,8 @@ task.spawn(function()
             CursedRush = tonumber(Options.CursedRushPriority and Options.CursedRushPriority.Value) or 12,
             KingCursesRush = tonumber(Options.KingCursesRushPriority and Options.KingCursesRushPriority.Value) or 13,
             NinjaRaid = tonumber(Options.NinjaRaidPriority and Options.NinjaRaidPriority.Value) or 14,
+            SinsRaid = tonumber(Options.SinsRaidPriority and Options.SinsRaidPriority.Value) or 15,
+            TrialHard = tActiveTrialHard and 0 or (tonumber(Options.TrialHardPriority and Options.TrialHardPriority.Value) or 16),
         }
 
         local canJoin = {
@@ -2572,6 +2025,7 @@ task.spawn(function()
             Gate = not tRestrGate or tActiveGate,
             TrialEasy = not tRestrTrialEasy or tActiveTrialEasy,
             TrialMedium = not tRestrTrialMedium or tActiveTrialMedium,
+            TrialHard = not tRestrTrialHard or tActiveTrialHard,
             TombRaid = true,
             SoulRaid = true,
             BeachDefense = true,
@@ -2582,6 +2036,7 @@ task.spawn(function()
             CursedRush = true,
             KingCursesRush = true,
             NinjaRaid = true,
+            SinsRaid = true,
         }
 
         if State.currentMode then
@@ -2601,20 +2056,6 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- CHAT ALGILAMA + REMOTE JOIN SİSTEMİ
--- Dungeon/TrialEasy/TrialMedium chat mesajıyla algılanır;
--- Gate notify'dan algılanır (chat'e düşmüyor);
--- Hepsi remote ile join edilir (buton tıklama yok).
--- ══════════════════════════════════════════════════════════════
-
--- ══════════════════════════════════════════════════════════════
--- DAVET ALGILAMA SİSTEMİ
--- Dungeon/Trial: Arena varlığı (workspace) + Notify + Timing
--- Gate: Notify + Timing (arena yöntemi Gate için uygun değil)
--- ══════════════════════════════════════════════════════════════
-
--- Arena bazlı algılama: workspace'te arena klasörü varsa mod açık demektir
 local ARENA_CHECKS = {
     Dungeon = function()
         local arenas = workspace:FindFirstChild("DungeonArenas")
@@ -2628,6 +2069,10 @@ local ARENA_CHECKS = {
         local arenas = workspace:FindFirstChild("TimeTrialArenas")
         return arenas and arenas:FindFirstChild("Medium") ~= nil
     end,
+    TrialHard = function()
+        local arenas = workspace:FindFirstChild("TimeTrialArenas")
+        return arenas and arenas:FindFirstChild("Hard") ~= nil
+    end,
 }
 
 local function isArenaOpen(mode)
@@ -2637,76 +2082,15 @@ local function isArenaOpen(mode)
     return ok and result
 end
 
--- Timing bazlı algılama (yedek): timing ayarlarında seçilen dakikadaysak mod "açık" kabul edilir
-local TIMING_MODE_MAP = {
-    Dungeon = "Dungeon",
-    Gate = "Gate",
-    TrialEasy = "TrialEasy",
-    TrialMedium = "TrialMedium",
-}
-
-local function isTimingFallbackActive(mode)
-    local timingKey = TIMING_MODE_MAP[mode]
-    if not timingKey then return false end
-
-    local toggleKey = timingKey .. "TimingToggle"
-    local dropKey = timingKey .. "Times"
-    if not (Options[toggleKey] and Options[toggleKey].Value) then return false end
-
-    local selected = selectedMultiValues(Options[dropKey] and Options[dropKey].Value)
-    local currentMin = os.date("*t").min
-
-    for _, timeStr in ipairs(selected) do
-        local minStr = timeStr:match("xx:(%d+)")
-        if minStr then
-            local targetMin = tonumber(minStr)
-            if currentMin == targetMin then return true end
-        end
-    end
-    return false
-end
-
--- ══════════════════════════════════════════════════════════════
--- GATE BRIDGE EVENT LISTENER
--- Popups kapalı olsa bile çalışır (sunucu event'i her zaman gelir)
--- ══════════════════════════════════════════════════════════════
-
-local GateBridgeOpen = false
-local GateBridgeRank = nil
-local GateBridgeTime = 0
-local GateBridgeHooked = false
-
-local function hookGateBridge()
-    if GateBridgeHooked then return end
-    GateBridgeHooked = true
-    task.spawn(function()
-        pcall(function()
-            local Library = require(ReplicatedStorage:WaitForChild("SimpleWorld"):WaitForChild("Library"))
-            if not Library or not Library.getBridge then return end
-
-            local RaidAnnouncement = Library.getBridge("RaidAnnouncement")
-            if not RaidAnnouncement then return end
-
-            RaidAnnouncement:Connect(function(data)
-                if type(data) == "table" and data.NotifyKind == "GamemodeOpen" and data.GateTeleport == true then
-                    GateBridgeOpen = true
-                    GateBridgeRank = data.GateRank
-                    GateBridgeTime = tick()
-                end
-            end)
-        end)
-    end)
-end
-
 local function isGateBridgeActive()
     if not GateBridgeOpen then return false end
-    -- Gate 60 sn açık kalır
+
     if tick() - GateBridgeTime > 60 then
         GateBridgeOpen = false
         GateBridgeRank = nil
         return false
     end
-    -- Rank kontrolü
+
     if GateBridgeRank then
         local selectedRanks = selectedMultiValues(Options.GateRanks and Options.GateRanks.Value)
         for _, r in ipairs(selectedRanks) do
@@ -2717,53 +2101,20 @@ local function isGateBridgeActive()
     return true
 end
 
--- Birleşik kontrol: Arena VEYA Bridge Event VEYA Notify
 local function isInviteAvailable(info)
-    -- 1. Arena kontrolü (öncelik — en güvenilir)
+
     if isArenaOpen(info.mode) then return true end
-    -- 2. Gate Bridge event kontrolü (popups kapalı olsa da çalışır)
-    if info.mode == "Gate" then
-        hookGateBridge() -- Auto Gate açık olduğunda ilk kez hook'u başlat
-        if isGateBridgeActive() then return true end
-        -- Fallback: notify hâlâ ekrandaysa (hook geç kurulduysa yakalar)
-        local notifyActive = false
-        pcall(function()
-            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-            local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-            if gamemodeNotify then
-                local notify = gamemodeNotify:FindFirstChild("Notify_Raid_World5")
-                if notify and notify.Visible then
-                    local allowed, _ = getGateRankIfAllowed()
-                    notifyActive = allowed
-                end
-            end
-        end)
-        if notifyActive then return true end
-    end
-    -- 3. Notify kontrolü (Gate hariç — Gate bridge event kullanır)
-    if info.notifyName and info.mode ~= "Gate" then
-        local notifyActive = false
-        pcall(function()
-            local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-            local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-            if gamemodeNotify then
-                local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                if notify and notify.Visible then
-                    notifyActive = true
-                end
-            end
-        end)
-        if notifyActive then return true end
-    end
+
+    if info.mode == "Gate" and isGateBridgeActive() then return true end
     return false
 end
 
--- Join fire fonksiyonları haritası
 local JOIN_FIRE_MAP = {
     Dungeon = fireJoinDungeon,
     Gate = fireJoinGate,
     TrialEasy = fireJoinTrialEasy,
     TrialMedium = fireJoinTrialMedium,
+    TrialHard = fireJoinTrialHard,
 }
 
 local GAMEMODE_INVITES = {
@@ -2771,16 +2122,15 @@ local GAMEMODE_INVITES = {
     { mode = "Gate", optionKey = "AutoGate", returnKey = "AutoReturnGate", notifyName = "Notify_Raid_World5", rankCheck = true },
     { mode = "TrialEasy", optionKey = "AutoTrialEasy", returnKey = "AutoReturnTrialEasy", notifyName = "Notify_TimeTrial_Easy" },
     { mode = "TrialMedium", optionKey = "AutoTrialMedium", returnKey = "AutoReturnTrialMedium", notifyName = "Notify_TimeTrial_Medium" },
+    { mode = "TrialHard", optionKey = "AutoTrialHard", returnKey = "AutoReturnTrialHard", notifyName = "Notify_TimeTrial_Hard" },
 }
 
--- LOOP 2: INVITE HANDLER (her 0.5s)
 task.spawn(function()
-    while task.wait(0.5) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.currentMode then continue end
 
-        -- Sadece normal dünyadayken join dene
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
         if not visibility or not string.match(tostring(visibility), "^World:") then continue end
 
@@ -2804,7 +2154,6 @@ task.spawn(function()
         table.sort(availableInvites, function(a, b) return a.priority < b.priority end)
         local best = availableInvites[1]
 
-        -- Daha yüksek önceliği olan başka bir davet var mı kontrol et
         local dominated = false
         for _, other in ipairs(availableInvites) do
             if other.info.mode ~= best.info.mode and other.priority < best.priority then
@@ -2820,11 +2169,9 @@ task.spawn(function()
             task.wait(0.3)
         end
 
-        -- Remote ile join
         local fireFn = JOIN_FIRE_MAP[best.info.mode]
         if fireFn then fireFn() end
 
-        -- Gate bridge state sıfırla
         if best.info.mode == "Gate" then
             GateBridgeOpen = false
             GateBridgeRank = nil
@@ -2837,15 +2184,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2B: TOMB RAID CREATOR (her 1s)
--- Tomb Raid'in davetiyesi/zamanlaması yok; kullanıcı istediği an oluşturur.
--- Bu yüzden dünyada boştayken ve daha yüksek öncelikli bir davet yokken
--- doğrudan remote ile raid oluşturulur.
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -2855,32 +2195,17 @@ task.spawn(function()
         if State.currentMode then continue end
         if not State.canJoin.TombRaid then continue end
 
-        -- Sadece normal dünyadayken oluştur
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
         if not visibility or not string.match(tostring(visibility), "^World:") then continue end
 
-        -- Teleport loading varsa bekle
         local tl = getTeleportLoading()
         if tl and tl.Visible then continue end
 
-        -- Daha yüksek öncelikli bir mod daveti varsa (chat veya notify), önce onun işlenmesini bekle
         local blocked = false
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.TombRaid then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -2897,7 +2222,6 @@ task.spawn(function()
 
         waitForTeleportComplete()
 
-        -- Raid'e gerçekten girildi mi kontrol et; girilemediyse loop tekrar dener
         local entered = false
         local checkStart = tick()
         while tick() - checkStart < 5 do
@@ -2911,12 +2235,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2C: SOUL RAID CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -2936,19 +2256,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.SoulRaid then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -2977,12 +2285,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2D: BEACH DEFENSE CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3002,19 +2306,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.BeachDefense then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -3043,12 +2335,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2E: CLOVER RAID CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3068,19 +2356,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.CloverRaid then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -3109,12 +2385,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2F: INFINITY CASTLE CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3134,19 +2406,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.InfinityCastle then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -3175,12 +2435,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2G: TITAN DEFENSE CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3200,19 +2456,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.TitanDefense then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -3241,12 +2485,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2H: TIMELESS RAID CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3266,19 +2506,7 @@ task.spawn(function()
         for _, info in ipairs(GAMEMODE_INVITES) do
             local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
             if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.TimelessRaid then
-                if info.source == "chat" and isChatInviteActive(info.mode) then
-                    blocked = true; break
-                elseif info.source == "notify" or info.source == "both" then
-                    pcall(function()
-                        local hud = LocalPlayer.PlayerGui:FindFirstChild("HUD")
-                        local gamemodeNotify = hud and hud:FindFirstChild("Main") and hud.Main:FindFirstChild("GamemodeNotify")
-                        if gamemodeNotify and info.notifyName then
-                            local notify = gamemodeNotify:FindFirstChild(info.notifyName)
-                            if notify and notify.Visible then blocked = true end
-                        end
-                    end)
-                    if blocked then break end
-                end
+                if isInviteAvailable(info) then blocked = true; break end
             end
         end
         if blocked then continue end
@@ -3307,12 +2535,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2I-pre: NINJA RAID CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3361,12 +2585,53 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2I: CURSED RUSH CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
+task.spawn(function()
+    while task.wait(0.4) do
+        if isMultiplayerPaused() then continue end
+        if State.isJoining then continue end
+        if State.isReturning then continue end
+
+        local isEnabled = Options.AutoSinsRaid and Options.AutoSinsRaid.Value
+        if not isEnabled then continue end
+        if State.currentMode then continue end
+        if not State.canJoin.SinsRaid then continue end
+
+        local visibility = LocalPlayer:GetAttribute("VisibilityContext")
+        if not visibility or not string.match(tostring(visibility), "^World:") then continue end
+
+        local tl = getTeleportLoading()
+        if tl and tl.Visible then continue end
+
+        local blocked = false
+        for _, info in ipairs(GAMEMODE_INVITES) do
+            local otherEnabled = Options[info.optionKey] and Options[info.optionKey].Value
+            if otherEnabled and State.canJoin[info.mode] and State.priorities[info.mode] < State.priorities.SinsRaid then
+                if isInviteAvailable(info) then blocked = true; break end
+            end
+        end
+        if blocked then continue end
+
+        State.isJoining = true
+
+        fireSinsRaidCreate()
+        State.hasLeft.SinsRaid = false
+
+        waitForTeleportComplete()
+
+        local entered = false
+        local checkStart = tick()
+        while tick() - checkStart < 5 do
+            if isSinsRaidContext(LocalPlayer:GetAttribute("VisibilityContext")) then entered = true; break end
+            task.wait(0.2)
+        end
+
+        State.isJoining = false
+        if not entered then task.wait(2) end
+    end
+end)
 
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3415,12 +2680,8 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 2J: KING OF CURSES RUSH CREATOR (her 1s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
-    while task.wait(1) do
+    while task.wait(0.4) do
         if isMultiplayerPaused() then continue end
         if State.isJoining then continue end
         if State.isReturning then continue end
@@ -3469,10 +2730,6 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 3: COMBAT (her 0.01s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
     while task.wait(0.01) do
         if isMultiplayerPaused() then continue end
@@ -3493,10 +2750,12 @@ task.spawn(function()
         elseif mode == "TitanDefense" then isAutoEnabled = Options.AutoTitanDefense and Options.AutoTitanDefense.Value
         elseif mode == "TimelessRaid" then isAutoEnabled = Options.AutoTimelessRaid and Options.AutoTimelessRaid.Value
         elseif mode == "NinjaRaid" then isAutoEnabled = Options.AutoNinjaRaid and Options.AutoNinjaRaid.Value
+        elseif mode == "SinsRaid" then isAutoEnabled = Options.AutoSinsRaid and Options.AutoSinsRaid.Value
         elseif mode == "CursedRush" then isAutoEnabled = Options.AutoCursedRush and Options.AutoCursedRush.Value
         elseif mode == "KingCursesRush" then isAutoEnabled = Options.AutoKingCursesRush and Options.AutoKingCursesRush.Value
         elseif mode == "TrialEasy" then isAutoEnabled = Options.AutoTrialEasy and Options.AutoTrialEasy.Value
         elseif mode == "TrialMedium" then isAutoEnabled = Options.AutoTrialMedium and Options.AutoTrialMedium.Value
+        elseif mode == "TrialHard" then isAutoEnabled = Options.AutoTrialHard and Options.AutoTrialHard.Value
         end
         if not isAutoEnabled then continue end
 
@@ -3507,10 +2766,8 @@ task.spawn(function()
             continue
         end
 
-        -- Auto leave check
         local shouldLeave = false
 
-        -- Yüksek öncelikli davet varsa zorla leave ("Leave for Higher Priority")
         if not shouldLeave and Options.LeaveForHigherPriority and Options.LeaveForHigherPriority.Value then
             local currentPriority = State.priorities[mode] or 99
             for _, info in ipairs(GAMEMODE_INVITES) do
@@ -3643,6 +2900,18 @@ task.spawn(function()
                     shouldLeave = true
                 end
             end
+        elseif mode == "SinsRaid" then
+            local leaveEnabled = Options.AutoLeaveSinsRaid and Options.AutoLeaveSinsRaid.Value
+            local targetWave = tonumber(Options.LeaveSinsRaidWave and Options.LeaveSinsRaidWave.Value) or 100
+            if leaveEnabled and targetWave > 0 then
+                local aliveCount = 0
+                for _, e in ipairs(State.enemiesFolder:GetChildren()) do
+                    if isEnemyAlive(e) then aliveCount = aliveCount + 1 end
+                end
+                if State.currentWave > targetWave or (State.currentWave == targetWave and aliveCount == 0) then
+                    shouldLeave = true
+                end
+            end
         elseif mode == "CursedRush" then
             local leaveEnabled = Options.AutoLeaveCursedRush and Options.AutoLeaveCursedRush.Value
             local targetWave = tonumber(Options.LeaveCursedRushWave and Options.LeaveCursedRushWave.Value) or 300
@@ -3683,6 +2952,18 @@ task.spawn(function()
                     shouldLeave = true
                 end
             end
+        elseif mode == "TrialHard" then
+            local leaveEnabled = Options.AutoLeaveTrialHard and Options.AutoLeaveTrialHard.Value
+            local targetRoom = tonumber(Options.LeaveTrialHardRoom and Options.LeaveTrialHardRoom.Value) or 50
+            if leaveEnabled and targetRoom > 0 then
+                local aliveCount = 0
+                for _, e in ipairs(State.enemiesFolder:GetChildren()) do
+                    if isEnemyAlive(e) then aliveCount = aliveCount + 1 end
+                end
+                if State.currentTrialRoom > targetRoom or (State.currentTrialRoom == targetRoom and aliveCount == 0) then
+                    shouldLeave = true
+                end
+            end
         end
 
         if shouldLeave then
@@ -3692,7 +2973,7 @@ task.spawn(function()
                     leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DungeonGui")
                         and LocalPlayer.PlayerGui.DungeonGui:FindFirstChild("Main")
                         and LocalPlayer.PlayerGui.DungeonGui.Main:FindFirstChild("Leave")
-                elseif mode == "Gate" or mode == "TombRaid" or mode == "SoulRaid" or mode == "CloverRaid" or mode == "InfinityCastle" or mode == "TimelessRaid" or mode == "NinjaRaid" then
+                elseif mode == "Gate" or mode == "TombRaid" or mode == "SoulRaid" or mode == "CloverRaid" or mode == "InfinityCastle" or mode == "TimelessRaid" or mode == "NinjaRaid" or mode == "SinsRaid" then
                     leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("RaidGui")
                         and LocalPlayer.PlayerGui.RaidGui:FindFirstChild("Main")
                         and LocalPlayer.PlayerGui.RaidGui.Main:FindFirstChild("Leave")
@@ -3704,13 +2985,13 @@ task.spawn(function()
                     leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("DefenseGui")
                         and LocalPlayer.PlayerGui.DefenseGui:FindFirstChild("Main")
                         and LocalPlayer.PlayerGui.DefenseGui.Main:FindFirstChild("Leave")
-                elseif mode == "TrialEasy" or mode == "TrialMedium" then
+                elseif mode == "TrialEasy" or mode == "TrialMedium" or mode == "TrialHard" then
                     leaveBtn = LocalPlayer.PlayerGui:FindFirstChild("TrialGui")
                         and LocalPlayer.PlayerGui.TrialGui:FindFirstChild("Main")
                         and LocalPlayer.PlayerGui.TrialGui.Main:FindFirstChild("Leave")
                 end
                 if leaveBtn then
-                    -- Leave butonları için doğrudan VIM kullan
+
                     local clicked = false
                     pcall(function()
                         local inset = GuiService:GetGuiInset()
@@ -3722,7 +3003,7 @@ task.spawn(function()
                         clicked = true
                     end)
                     if not clicked then robustClickObject(leaveBtn) end
-                    -- Gerçekten çıkıp çıkmadığımızı doğrula; çıkamadıysak hasLeft set etme (tekrar denesin)
+
                     task.wait(1)
                     local stillInMode = false
                     pcall(function()
@@ -3738,14 +3019,13 @@ task.spawn(function()
             continue
         end
 
-        -- Farm enemies
         local targets = waitForWaveSpawn(State.enemiesFolder, 5)
         local zoneStr = ""
         if mode == "Dungeon" then
             zoneStr = State.currentRoom > 0 and ("[Room " .. State.currentRoom .. "]") or ""
-        elseif mode == "Gate" or mode == "TombRaid" or mode == "SoulRaid" or mode == "BeachDefense" or mode == "CloverRaid" or mode == "InfinityCastle" or mode == "TitanDefense" or mode == "TimelessRaid" or mode == "CursedRush" or mode == "KingCursesRush" or mode == "NinjaRaid" then
+        elseif mode == "Gate" or mode == "TombRaid" or mode == "SoulRaid" or mode == "BeachDefense" or mode == "CloverRaid" or mode == "InfinityCastle" or mode == "TitanDefense" or mode == "TimelessRaid" or mode == "CursedRush" or mode == "KingCursesRush" or mode == "NinjaRaid" or mode == "SinsRaid" then
             zoneStr = State.currentWave > 0 and ("[Wave " .. State.currentWave .. "]") or ""
-        elseif mode == "TrialEasy" or mode == "TrialMedium" then
+        elseif mode == "TrialEasy" or mode == "TrialMedium" or mode == "TrialHard" then
             zoneStr = State.currentTrialRoom > 0 and ("[Room " .. State.currentTrialRoom .. "]") or ""
         end
 
@@ -3760,19 +3040,17 @@ task.spawn(function()
             elseif mode == "TitanDefense" then return Options.AutoTitanDefense and Options.AutoTitanDefense.Value
             elseif mode == "TimelessRaid" then return Options.AutoTimelessRaid and Options.AutoTimelessRaid.Value
             elseif mode == "NinjaRaid" then return Options.AutoNinjaRaid and Options.AutoNinjaRaid.Value
+            elseif mode == "SinsRaid" then return Options.AutoSinsRaid and Options.AutoSinsRaid.Value
             elseif mode == "CursedRush" then return Options.AutoCursedRush and Options.AutoCursedRush.Value
             elseif mode == "KingCursesRush" then return Options.AutoKingCursesRush and Options.AutoKingCursesRush.Value
             elseif mode == "TrialEasy" then return Options.AutoTrialEasy and Options.AutoTrialEasy.Value
             elseif mode == "TrialMedium" then return Options.AutoTrialMedium and Options.AutoTrialMedium.Value
+            elseif mode == "TrialHard" then return Options.AutoTrialHard and Options.AutoTrialHard.Value
             end
             return false
         end, State.enemiesFolder)
     end
 end)
-
--- ══════════════════════════════════════════════════════════════
--- LOOP 4: WORLD FARM (her 0.01s)
--- ══════════════════════════════════════════════════════════════
 
 task.spawn(function()
     while task.wait(0.05) do
@@ -3793,7 +3071,6 @@ task.spawn(function()
         if State.isReturning then continue end
         if State.isJoining then continue end
 
-        -- Check if any invite is active (pause farm for invite handling)
         local hasInvite = false
         for _, info in ipairs(GAMEMODE_INVITES) do
             local isEnabled = Options[info.optionKey] and Options[info.optionKey].Value
@@ -3814,10 +3091,6 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 5: RETURN HANDLER (her 0.5s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
     while task.wait(0.5) do
         if isMultiplayerPaused() then continue end
@@ -3826,7 +3099,7 @@ task.spawn(function()
         local visibility = LocalPlayer:GetAttribute("VisibilityContext")
         if not visibility or not string.match(visibility, "^World:(%d+)$") then continue end
 
-        local anyWasIn = State.wasIn.Dungeon or State.wasIn.Gate or State.wasIn.TrialEasy or State.wasIn.TrialMedium or State.wasIn.TombRaid or State.wasIn.SoulRaid or State.wasIn.BeachDefense or State.wasIn.CloverRaid or State.wasIn.InfinityCastle or State.wasIn.TitanDefense or State.wasIn.TimelessRaid or State.wasIn.CursedRush or State.wasIn.KingCursesRush or State.wasIn.NinjaRaid
+        local anyWasIn = State.wasIn.Dungeon or State.wasIn.Gate or State.wasIn.TrialEasy or State.wasIn.TrialMedium or State.wasIn.TrialHard or State.wasIn.TombRaid or State.wasIn.SoulRaid or State.wasIn.BeachDefense or State.wasIn.CloverRaid or State.wasIn.InfinityCastle or State.wasIn.TitanDefense or State.wasIn.TimelessRaid or State.wasIn.CursedRush or State.wasIn.KingCursesRush or State.wasIn.NinjaRaid or State.wasIn.SinsRaid
         if not anyWasIn then continue end
 
         local doReturn = false
@@ -3844,8 +3117,9 @@ task.spawn(function()
         if State.wasIn.CursedRush and Options.AutoReturnCursedRush and Options.AutoReturnCursedRush.Value then doReturn = true end
         if State.wasIn.KingCursesRush and Options.AutoReturnKingCursesRush and Options.AutoReturnKingCursesRush.Value then doReturn = true end
         if State.wasIn.NinjaRaid and Options.AutoReturnNinjaRaid and Options.AutoReturnNinjaRaid.Value then doReturn = true end
+        if State.wasIn.TrialHard and Options.AutoReturnTrialHard and Options.AutoReturnTrialHard.Value then doReturn = true end
 
-        State.wasIn = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false }
+        State.wasIn = { Dungeon = false, Gate = false, TrialEasy = false, TrialMedium = false, TrialHard = false, TombRaid = false, SoulRaid = false, BeachDefense = false, CloverRaid = false, InfinityCastle = false, TitanDefense = false, TimelessRaid = false, CursedRush = false, KingCursesRush = false, NinjaRaid = false, SinsRaid = false }
         saveReturnData()
 
         if doReturn then
@@ -3855,10 +3129,6 @@ task.spawn(function()
         end
     end
 end)
-
--- ══════════════════════════════════════════════════════════════
--- LOOP 6: CURSED RUSH - AUTO COLLECT SUKUNA (her 0.3s)
--- ══════════════════════════════════════════════════════════════
 
 local isCollectingSukuna = false
 
@@ -3903,7 +3173,7 @@ local function getAliveMobs(arena)
 end
 
 local function getPromptTargetCFrame(finger)
-    -- Prompt'un bağlı olduğu parçayı hedefle (Cube.166 gibi), yoksa model pivotu
+
     local prompt = findFingerPrompt(finger)
     if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
         return prompt.Parent.CFrame
@@ -3916,18 +3186,15 @@ local function collectSukunaFinger(arena)
 
     local startTime = tick()
 
-    -- Model arenada var olduğu sürece 4 birim üstünde hover ile bekle ve prompt'u tetikle
     while (tick() - startTime < 20) do
         if not (Options.AutoCollectSukuna and Options.AutoCollectSukuna.Value) or not isInCursedRush() then
             disableHover()
             return false
         end
 
-        -- Modeli her turda taze bul: referans eskise bile gerçek durumu görür
         local finger = arena:FindFirstChild("SukunaFinger")
         if not finger or not finger.Parent then break end
 
-        -- Parmağın 4 birim üstüne, yüzü parmağa dönük ışınlan; hover ile düşme engellenir
         local targetCF = getPromptTargetCFrame(finger)
         if targetCF then
             enableHover()
@@ -3941,10 +3208,8 @@ local function collectSukunaFinger(arena)
 
     disableHover()
 
-    -- Model hâlâ arenada duruyorsa toplanmamış demektir, moba dönme
     if arena:FindFirstChild("SukunaFinger") then return false end
 
-    -- Model gerçekten yok oldu (toplandı) -> mobların tam ortasına geri ışınlan
     local mobs = getAliveMobs(arena)
     if #mobs > 0 then
         local tcf = optimalFarmPosition(mobs, "Cursed")
@@ -3975,10 +3240,6 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- LOOP 7: CURSED RUSH - AUTO FARM (her 0.05s)
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
     while task.wait(0.05) do
         if isMultiplayerPaused() then continue end
@@ -3987,7 +3248,6 @@ task.spawn(function()
         local isEnabled = Options.AutoFarmCursed and Options.AutoFarmCursed.Value
         if not isEnabled then continue end
 
-        -- Teleport loading ekranı varsa bekle, o sırada farm yapma
         local tl = getTeleportLoading()
         if tl and tl.Visible then
             disableHover()
@@ -4002,9 +3262,9 @@ task.spawn(function()
         local enemiesFolder = arena:FindFirstChild("Enemies")
         local targets = getAliveMobs(arena)
         if #targets > 0 then
-            -- "Cursed" tipi: her zaman perfect position (optimal pozisyon) + hover ile farm
+
             farmEnemies(targets, "Cursed", "", function()
-                -- Boss rush'tan çıkılırsa veya loading ekranı gelirse farm anında durur
+
                 local tl2 = getTeleportLoading()
                 if tl2 and tl2.Visible then return false end
                 return Options.AutoFarmCursed and Options.AutoFarmCursed.Value
@@ -4017,11 +3277,7 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- PRIORITY UI
--- ══════════════════════════════════════════════════════════════
-
-local PRIORITY_VALUES = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14" }
+local PRIORITY_VALUES = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16" }
 local updatingPriority = false
 
 local DungeonPriorityDrop = Tabs.Priority:AddDropdown("DungeonPriority", { Title = "Dungeon", Values = PRIORITY_VALUES, Multi = false, Default = "1" })
@@ -4038,6 +3294,8 @@ local TimelessRaidPriorityDrop = Tabs.Priority:AddDropdown("TimelessRaidPriority
 local CursedRushPriorityDrop = Tabs.Priority:AddDropdown("CursedRushPriority", { Title = "Cursed Rush", Values = PRIORITY_VALUES, Multi = false, Default = "12" })
 local KingCursesRushPriorityDrop = Tabs.Priority:AddDropdown("KingCursesRushPriority", { Title = "King of Curses", Values = PRIORITY_VALUES, Multi = false, Default = "13" })
 local NinjaRaidPriorityDrop = Tabs.Priority:AddDropdown("NinjaRaidPriority", { Title = "Ninja Raid", Values = PRIORITY_VALUES, Multi = false, Default = "14" })
+local SinsRaidPriorityDrop = Tabs.Priority:AddDropdown("SinsRaidPriority", { Title = "Sins Raid", Values = PRIORITY_VALUES, Multi = false, Default = "15" })
+local TrialHardPriorityDrop = Tabs.Priority:AddDropdown("TrialHardPriority", { Title = "Trial Hard", Values = PRIORITY_VALUES, Multi = false, Default = "16" })
 
 local allPriorityDrops = {
     { drop = DungeonPriorityDrop, key = "DungeonPriority" },
@@ -4054,6 +3312,8 @@ local allPriorityDrops = {
     { drop = CursedRushPriorityDrop, key = "CursedRushPriority" },
     { drop = KingCursesRushPriorityDrop, key = "KingCursesRushPriority" },
     { drop = NinjaRaidPriorityDrop, key = "NinjaRaidPriority" },
+    { drop = SinsRaidPriorityDrop, key = "SinsRaidPriority" },
+    { drop = TrialHardPriorityDrop, key = "TrialHardPriority" },
 }
 
 local function onPriorityChanged(changedDrop, newVal)
@@ -4086,12 +3346,10 @@ TimelessRaidPriorityDrop:OnChanged(function(val) onPriorityChanged(TimelessRaidP
 CursedRushPriorityDrop:OnChanged(function(val) onPriorityChanged(CursedRushPriorityDrop, val) end)
 KingCursesRushPriorityDrop:OnChanged(function(val) onPriorityChanged(KingCursesRushPriorityDrop, val) end)
 NinjaRaidPriorityDrop:OnChanged(function(val) onPriorityChanged(NinjaRaidPriorityDrop, val) end)
+SinsRaidPriorityDrop:OnChanged(function(val) onPriorityChanged(SinsRaidPriorityDrop, val) end)
+TrialHardPriorityDrop:OnChanged(function(val) onPriorityChanged(TrialHardPriorityDrop, val) end)
 
 Tabs.Priority:AddToggle("LeaveForHigherPriority", { Title = "Leave for Higher Priority", Default = false })
-
--- ══════════════════════════════════════════════════════════════
--- TIMING UI
--- ══════════════════════════════════════════════════════════════
 
 Tabs.Timing:AddParagraph({
     Title = "Timing Information",
@@ -4102,6 +3360,7 @@ local GateTimesValues = { "xx:00", "xx:10", "xx:20", "xx:30", "xx:40", "xx:50" }
 local DungeonTimesValues = { "xx:00", "xx:15", "xx:30", "xx:45" }
 local TrialEasyTimesValues = { "xx:00", "xx:30" }
 local TrialMediumTimesValues = { "xx:15", "xx:45" }
+local TrialHardTimesValues = { "xx:07", "xx:37" }
 
 Tabs.Timing:AddSection("Gate Timing")
 Tabs.Timing:AddToggle("GateTimingToggle", { Title = "Enable Gate Timing", Default = false })
@@ -4119,11 +3378,16 @@ Tabs.Timing:AddSection("Time Trial Medium Timing")
 Tabs.Timing:AddToggle("TrialMediumTimingToggle", { Title = "Enable Trial Medium Timing", Default = false })
 local TrialMediumTimesDrop = Tabs.Timing:AddDropdown("TrialMediumTimes", { Title = "Trial Medium", Values = TrialMediumTimesValues, Multi = true, Default = {} })
 
+Tabs.Timing:AddSection("Time Trial Hard Timing")
+Tabs.Timing:AddToggle("TrialHardTimingToggle", { Title = "Enable Trial Hard Timing", Default = false })
+local TrialHardTimesDrop = Tabs.Timing:AddDropdown("TrialHardTimes", { Title = "Trial Hard", Values = TrialHardTimesValues, Multi = true, Default = {} })
+
 local allTimingDrops = {
     { drop = GateTimesDrop, key = "GateTimes" },
     { drop = DungeonTimesDrop, key = "DungeonTimes" },
     { drop = TrialEasyTimesDrop, key = "TrialEasyTimes" },
     { drop = TrialMediumTimesDrop, key = "TrialMediumTimes" },
+    { drop = TrialHardTimesDrop, key = "TrialHardTimes" },
 }
 
 local updatingTiming = false
@@ -4161,10 +3425,7 @@ GateTimesDrop:OnChanged(function(val) onTimingChanged(GateTimesDrop, val) end)
 DungeonTimesDrop:OnChanged(function(val) onTimingChanged(DungeonTimesDrop, val) end)
 TrialEasyTimesDrop:OnChanged(function(val) onTimingChanged(TrialEasyTimesDrop, val) end)
 TrialMediumTimesDrop:OnChanged(function(val) onTimingChanged(TrialMediumTimesDrop, val) end)
-
--- ══════════════════════════════════════════════════════════════
--- SETTINGS
--- ══════════════════════════════════════════════════════════════
+TrialHardTimesDrop:OnChanged(function(val) onTimingChanged(TrialHardTimesDrop, val) end)
 
 Tabs.Settings:AddToggle("AutoExecuteOnTeleport", { Title = "Auto Execute on Teleport", Description = "", Default = false })
 Tabs.Settings:AddToggle("AntiAFK", { Title = "Anti AFK", Description = "", Default = true })
@@ -4255,10 +3516,6 @@ BlackScreenToggle:OnChanged(function()
     updateRenderState()
 end)
 
--- ══════════════════════════════════════════════════════════════
--- ANTI AFK SYSTEM (MODERN MULTI-LAYERED)
--- ══════════════════════════════════════════════════════════════
-
 local function setupAntiAFK()
     pcall(function()
         if typeof(getconnections) == "function" then
@@ -4303,10 +3560,6 @@ end
 
 setupAntiAFK()
 
--- ══════════════════════════════════════════════════════════════
--- AUTO REJOIN ON KICK / DISCONNECT
--- ══════════════════════════════════════════════════════════════
-
 local function setupAutoRejoin()
     local TeleportService = game:GetService("TeleportService")
     local GuiService = game:GetService("GuiService")
@@ -4332,7 +3585,6 @@ local function setupAutoRejoin()
             end
         end)
 
-        -- 1. VIP / Private Server Rejoin
         if psId then
             local vipSuccess = pcall(function()
                 TeleportService:TeleportToPrivateServer(placeId, psId, { LocalPlayer })
@@ -4342,7 +3594,6 @@ local function setupAutoRejoin()
             end
         end
 
-        -- 2. Same Instance JobId Rejoin (Public or standard)
         if jobId and jobId ~= "" then
             pcall(function()
                 TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
@@ -4350,7 +3601,6 @@ local function setupAutoRejoin()
             task.wait(3)
         end
 
-        -- 3. General Place Fallback Rejoin
         pcall(function()
             TeleportService:Teleport(placeId, LocalPlayer)
         end)
@@ -4391,10 +3641,6 @@ LocalPlayer.OnTeleport:Connect(function()
         end
     end
 end)
-
--- ══════════════════════════════════════════════════════════════
--- BALL COLLECTOR ROUTINE
--- ══════════════════════════════════════════════════════════════
 
 task.spawn(function()
     while true do
@@ -4455,10 +3701,6 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- CROW COLLECTOR ROUTINE
--- ══════════════════════════════════════════════════════════════
-
 task.spawn(function()
     while true do
         task.wait(1)
@@ -4518,9 +3760,64 @@ task.spawn(function()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════
--- SAVE / LOAD CONFIG
--- ══════════════════════════════════════════════════════════════
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if Options.AutoCollectCommandments and Options.AutoCollectCommandments.Value then
+            local targetFolder = workspace:FindFirstChild("World12Commandments")
+            local commandmentList = {}
+            if targetFolder then
+                for _, child in ipairs(targetFolder:GetChildren()) do
+                    if child:IsA("Model") and child.Parent then
+                        table.insert(commandmentList, child)
+                    end
+                end
+            end
+
+            local detected = #commandmentList
+            if detected > 0 then
+                CommandmentStatusParagraph:SetDesc(string.format("Status: Collecting commandments...\nDetected: %d | Collected: 0 | Skipped: 0", detected))
+                local collectedCount = 0
+                local skippedCount = 0
+
+                for i, commandment in ipairs(commandmentList) do
+                    if not (Options.AutoCollectCommandments and Options.AutoCollectCommandments.Value) then break end
+                    if commandment.Parent then
+                        CommandmentStatusParagraph:SetDesc(string.format("Status: Collecting (%d/%d)\nDetected: %d | Collected: %d | Skipped: %d", i, detected, detected, collectedCount, skippedCount))
+                        local success = collectSingleCommandment(commandment)
+                        if success then
+                            collectedCount = collectedCount + 1
+                        else
+                            skippedCount = skippedCount + 1
+                        end
+                        task.wait(0.15)
+                    else
+                        skippedCount = skippedCount + 1
+                    end
+                end
+
+                CommandmentStatusParagraph:SetDesc(string.format("Status: Session Finished\nDetected: %d | Collected: %d | Skipped: %d", detected, collectedCount, skippedCount))
+
+                if Options.AutoCommandmentServerHop and Options.AutoCommandmentServerHop.Value and Options.AutoCollectCommandments and Options.AutoCollectCommandments.Value then
+                    CommandmentStatusParagraph:SetDesc(string.format("Status: Server hopping...\nDetected: %d | Collected: %d | Skipped: %d", detected, collectedCount, skippedCount))
+                    task.wait(1)
+                    commandmentServerHop(function(st)
+                        CommandmentStatusParagraph:SetDesc("Status: " .. st)
+                    end)
+                end
+            else
+                CommandmentStatusParagraph:SetDesc("Status: No commandments found in World12Commandments\nDetected: 0 | Collected: 0 | Skipped: 0")
+                if Options.AutoCommandmentServerHop and Options.AutoCommandmentServerHop.Value and Options.AutoCollectCommandments and Options.AutoCollectCommandments.Value then
+                    CommandmentStatusParagraph:SetDesc("Status: No commandments detected. Server hopping...")
+                    task.wait(1)
+                    commandmentServerHop(function(st)
+                        CommandmentStatusParagraph:SetDesc("Status: " .. st)
+                    end)
+                end
+            end
+        end
+    end
+end)
 
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
@@ -4532,18 +3829,12 @@ SaveManager:SetFolder("AnimeAstral/Dungeon")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
--- Mob dropdown'ını config yüklenmeden ÖNCE doldur,
--- yoksa kaydedilmiş seçimler geçersiz sayılıp siliniyor
 pcall(refreshEnemies)
 
 SaveManager:LoadAutoloadConfig()
 
 Window:SelectTab(1)
 Fluent:Notify({ Title = "Anime Astral", Content = "Script loaded successfully!", Duration = 3 })
-
--- ══════════════════════════════════════════════════════════════
--- TOGGLE BUTTON
--- ══════════════════════════════════════════════════════════════
 
 task.delay(2, function()
     local gui = Instance.new("ScreenGui")
