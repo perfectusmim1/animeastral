@@ -276,8 +276,8 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
+    Announcements = Window:AddTab({ Title = "Announcements", Icon = "megaphone" }),
     Changelog = Window:AddTab({ Title = "Changelog", Icon = "file-text" }),
-    Feedback = Window:AddTab({ Title = "Feedback", Icon = "message-square" }),
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
     Main = Window:AddTab({ Title = "Fire City Dungeon", Icon = "swords" }),
     Gate = Window:AddTab({ Title = "Gate", Icon = "key" }),
@@ -289,6 +289,7 @@ local Tabs = {
     Priority = Window:AddTab({ Title = "Priority", Icon = "star" }),
     Timing = Window:AddTab({ Title = "Timing", Icon = "clock" }),
     Position = Window:AddTab({ Title = "Position", Icon = "map-pin" }),
+    Feedback = Window:AddTab({ Title = "Feedback", Icon = "message-square" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
 }
 
@@ -314,14 +315,14 @@ local savedReturnCFrame = nil
 local FarmHeightValue = 6
 
 
-Tabs.Changelog:AddSection("Join Discord")
+Tabs.Announcements:AddSection("Join Discord")
 
-Tabs.Changelog:AddParagraph({
+Tabs.Announcements:AddParagraph({
     Title = "Join Discord",
     Content = "Join our Discord server for updates, support, and community!"
 })
 
-Tabs.Changelog:AddButton({
+Tabs.Announcements:AddButton({
     Title = "Copy Discord Link",
     Description = "https://discord.gg/J8p7dPfEbV",
     Callback = function()
@@ -336,14 +337,14 @@ Tabs.Changelog:AddButton({
 })
 
 
-Tabs.Changelog:AddSection("Recommended Executor")
+Tabs.Announcements:AddSection("Recommended Executor")
 
-Tabs.Changelog:AddParagraph({
+Tabs.Announcements:AddParagraph({
     Title = "Recommended Executor",
     Content = "If you want the script to run completely smoothly and prevent Roblox from crashing, try this free executor. Note: If you have a low quality executor such as Xeno, some features like teleport may break in game when Auto Gate is enabled, so we recommend using this executor instead."
 })
 
-Tabs.Changelog:AddButton({
+Tabs.Announcements:AddButton({
     Title = "Copy Link",
     Description = "https://projectreal.gg",
     Callback = function()
