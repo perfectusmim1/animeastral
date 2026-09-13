@@ -67,7 +67,7 @@ local window = Rayfield:CreateWindow({
 -- ============ STATE ============
 local F = {
     collect = false, collectDelay = 2,
-    levelup = false, maxLevel = 40, levelDelay = 2.5,
+    levelup = false, maxLevel = 40, levelDelay = 2.5, smartLevel = false,
     placeBest = false, placeDelay = 5, replaceWorst = true,
     rebirth = false, rebirthDelay = 5,
     upgrades = false, upgradeDelay = 2, upgradeCats = {},
@@ -277,23 +277,83 @@ local function bestOwnedChance()
     end
     return best
 end
+local smartErrAt, lvlErrAt = 0, 0
 local function smartSellTick(force)
     if not F.smartSell then return end
     if not force and os.clock() - lastSmartT < 60 then return end
     lastSmartT = os.clock()
-    local L = effectiveLuck()
-    local T = SMART_K * L
-    local best = bestOwnedChance()
-    if best > 0 then T = math.min(T, best / 2) end
-    if T > 0 then
-        local mag = 10 ^ math.max(0, math.floor(math.log10(T) - 1))
-        T = math.floor(T / mag) * mag
-    end
-    if T ~= F.sellThreshold then
-        F.sellThreshold = T
+    local ok, err = pcall(function()
+        local L = effectiveLuck()
+        local T = SMART_K * L
+        local best = bestOwnedChance()
+        if best > 0 then T = math.min(T, best / 2) end
+        if T > 0 then
+            local mag = 10 ^ math.max(0, math.floor(math.log10(T) - 1))
+            T = math.floor(T / mag) * mag
+        end
         pcall(function() if U.sellInput then U.sellInput:Set(fmt(T), true) end end)
-        if F.sellSync and T > 0 then local s = getSig("SellService", "UpdateAutoSell") if s then pcall(function() s:Fire(T) end) end end
-        clog("Smart sell: keep 1 in " .. fmt(T) .. "+ (luck " .. fmt(L) .. ")")
+        if T ~= F.sellThreshold then
+            F.sellThreshold = T
+            if F.sellSync and T > 0 then local s = getSig("SellService", "UpdateAutoSell") if s then pcall(function() s:Fire(T) end) end end
+            clog("Smart sell: keep 1 in " .. fmt(T) .. "+ (luck " .. fmt(L) .. ")")
+        end
+    end)
+    if not ok and os.clock() - smartErrAt > 60 then
+        smartErrAt = os.clock()
+        clog("Smart sell error: " .. tostring(err))
+    end
+end
+local lastLvlT = 0
+local function smartLevelTick(force)
+    if not F.smartLevel then return end
+    if not force and os.clock() - lastLvlT < 30 then return end
+    lastLvlT = os.clock()
+    local ok, err = pcall(function()
+        local list, s = unlockedSlots()
+        local units = {}
+        for _, slot in ipairs(list) do
+            local d = s[tostring(slot)]
+            if d and d.unitId then
+                local e = invEntry(d.unitId)
+                if e and e.attributes then
+                    table.insert(units, { name = e.name, lvl = tonumber(e.attributes.level) or 1, mut = e.attributes.mutation })
+                end
+            end
+        end
+        if #units == 0 then return end
+        local m = money()
+        local function costTo(minL)
+            local c = 0
+            for _, u in ipairs(units) do
+                if u.lvl < minL then
+                    for lv = u.lvl, minL - 1 do
+                        local p = 0
+                        pcall(function() p = G.UnitUtil.GetLevelPrice(u.name, { level = lv, mutation = u.mut }) end)
+                        c += p
+                    end
+                end
+            end
+            return c
+        end
+        local cap = math.clamp(math.floor(tonumber(F.maxLevel) or 40), 1, 99)
+        local guard, moved = 0, true
+        while moved and guard < 25 do
+            moved = false guard += 1
+            if cap < 99 then
+                local up = costTo(cap + 1)
+                if up > 0 and up <= m * 0.1 then cap += 1 moved = true end
+            end
+            if not moved and cap > 1 and costTo(cap) > m * 0.5 then cap -= 1 moved = true end
+        end
+        if cap ~= math.floor(tonumber(F.maxLevel) or 40) then
+            F.maxLevel = cap
+            pcall(function() if U.maxLevel then U.maxLevel:Set(cap, true) end end)
+            clog("Smart level cap: " .. cap)
+        end
+    end)
+    if not ok and os.clock() - lvlErrAt > 60 then
+        lvlErrAt = os.clock()
+        clog("Smart level error: " .. tostring(err))
     end
 end
 local function waitVerify(fn, timeout)
@@ -852,6 +912,8 @@ U.levelup = tUnits:CreateToggle({ name = "Auto Level Up", value = false,
     callback = function(v) F.levelup = v end })
 U.maxLevel = tUnits:CreateSlider({ name = "Max Unit Level", range = { 1, 99 }, increment = 1, value = 40,
     callback = function(v) F.maxLevel = math.floor(v) end })
+U.smartLevel = tUnits:CreateToggle({ name = "Smart Level Cap", value = false,
+    callback = function(v) F.smartLevel = v if v then smartLevelTick(true) end end })
 U.levelDelay = tUnits:CreateSlider({ name = "Level Delay", range = { 0.1, 15 }, increment = 0.1, value = 2.5, suffix = "s",
     callback = function(v) F.levelDelay = v end })
 
@@ -1355,11 +1417,16 @@ local function doPlaceBest()
                 if doEquip(best) then
                     local sig = getSig("PlotService", "InteractSlot")
                     if sig then pcall(function() sig:Fire(slot) end) end
-                    waitVerify(function()
+                    local okPlace = waitVerify(function()
                         local d = slots()[tostring(slot)]
                         return d and d.unitId == best
                     end, 3)
-                    clog("Placed: " .. tostring((invEntry(best) or {}).name) .. " -> slot " .. slot)
+                    local be = invEntry(best) or {}
+                    if okPlace then
+                        clog("Placed: " .. tostring(be.name) .. " [1 in " .. fmt(bestChance) .. "] -> slot " .. slot)
+                    else
+                        clog("Place FAILED (server refused): " .. tostring(be.name) .. " [1 in " .. fmt(bestChance) .. "] -> slot " .. slot)
+                    end
                 end
                 return
             end
@@ -1385,11 +1452,17 @@ local function doPlaceBest()
             task.wait(0.3)
             if doEquip(best) then
                 pcall(function() sig:Fire(worstSlot) end)
-                waitVerify(function()
+                local okPlace = waitVerify(function()
                     local d = slots()[tostring(worstSlot)]
                     return d and d.unitId == best
                 end, 3)
-                clog("Swapped: slot " .. worstSlot .. " (" .. fmt(worst) .. " -> " .. fmt(bestChance) .. ")")
+                local be = invEntry(best) or {}
+                local winfo = placed[worstSlot] or {}
+                if okPlace then
+                    clog("Swapped slot " .. worstSlot .. ": " .. tostring(winfo.name) .. " [1 in " .. fmt(worst) .. "] -> " .. tostring(be.name) .. " [1 in " .. fmt(bestChance) .. "]")
+                else
+                    clog("Swap FAILED (server refused): " .. tostring(be.name) .. " [1 in " .. fmt(bestChance) .. "] -> slot " .. worstSlot)
+                end
             end
         end
     end)
@@ -2220,6 +2293,7 @@ task.spawn(function()
         task.wait(30)
         if F.claimQuests then pcall(doClaimQuests) end
         if F.smartSell then pcall(smartSellTick) end
+        if F.smartLevel then pcall(smartLevelTick) end
         pcall(statsHookTick)
         if F.sellSync and F.sellThreshold > 0 and os.clock() - last > 120 then
             last = os.clock()
