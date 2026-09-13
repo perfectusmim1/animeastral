@@ -1,5 +1,1077 @@
--- Protected by VEIL (https://veil-eta-smoky.vercel.app/)
-local Players=game:GetService("Players")local RS=game:GetService("ReplicatedStorage")local LocalPlayer=Players.LocalPlayer local AUTOEXEC_CODE=[[loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/animedice.lua"))()]]if game.PlaceId~=113290951185459 then error("[AnimeDiceHub] This script only works in Anime Dice.",0)end local ADH_SEQ=0 pcall(function()if typeof(getgenv)=="function"then local g=getgenv()g.ADH_Seq=(tonumber(g.ADH_Seq)or 0)+1 ADH_SEQ=g.ADH_Seq g.ADH_Claim={seq=ADH_SEQ,t=os.clock()}end end)task.wait(1)local _adhDup=false pcall(function()if typeof(getgenv)=="function"then local c=getgenv().ADH_Claim if type(c)~="table"or c.seq~=ADH_SEQ then _adhDup=true end end end)if _adhDup then return end local Rayfield do local lastErr for attempt=1,4 do local ok,lib=pcall(function()return loadstring(game:HttpGet("https://sirius.menu/gen2"))()end)if ok and type(lib)=="table"and type(lib.CreateWindow)=="function"then Rayfield=lib break end lastErr=lib if attempt<4 then task.wait(2)end end if not Rayfield then error("[AnimeDiceHub] Rayfield failed to load after 4 tries. Re-execute. Last error: "..tostring(lastErr))end end local window=Rayfield:CreateWindow({name="Anime Dice",subtitle="v1.0 | Perfectus",sidebarLayout=true,theme="default",icon="rbxassetid://127883209471308",})local F={collect=false,collectDelay=2,levelup=false,maxLevel=40,levelDelay=2.5,placeBest=false,placeDelay=5,replaceWorst=true,rebirth=false,rebirthDelay=5,upgrades=false,upgradeDelay=2,upgradeCats={},buyDice=false,equipDice=true,diceDelay=5,autoRoll=false,sellThreshold=0,sellSync=false,sellAuto=false,sellDelay=10,keepBest=0,tower=false,towerName="Dragon Tower",towerEquipBest=true,towerDelay=2,potionAuto=false,potionDelay=5,potionBest=true,potionExtend=false,potions={},gradeAuto=false,gradeDelay=2,gradeTargets={},gradeUnits={},gradeAll=false,gemReserve=0,traitAuto=false,traitDelay=2,traitTargets={},traitUnits={},traitAll=false,rerollReserve=0,statHookInterval=300,rollHookUrl="",rollHookOn=false,rollHookMin=0,statHookUrl="",statHookOn=false,claimQuests=false,hideRolls=false,hideTower=false,tradeAuto=false,tradeMoney=0,tradeRetries=3,tradeHop=true,tradeAutoGo=true,tradeNeedOffer=true,tradeMinItems=1,saveSettings=true,wsOn=false,wsValue=16,flyOn=false,flySpeed=50,noclip=false,afk=true,reexec=true,}local Alive=true local U={}local noclipConn,charConn,afkConn,tradeListenerConn,rollWatchConn=nil,nil,nil,nil,nil pcall(function()if typeof(getgenv)=="function"then getgenv().ADH_Window=window end end)local Busy={place=false,tower=false,dice=false,potion=false,grade=false,trait=false,trade=false}local Stats={collectedMoney=0,leveled=0,upgraded=0,rebirthed=0,sold=0,rolls=0,towerWins={},towerFloors=0,towerRewards={},potions=0,tradesSent=0,tradesOpened=0}local doInstantSell,doPotionTick,showPotions,doClaimQuests,doGradeTick,doTraitTick local G={ok=false,missing={}}local function need(name,fn)local ok,v=pcall(fn)if ok and v~=nil then G[name]=v return v end table.insert(G.missing,name)return nil end need("Network",function()return require(RS.Packages.Network)end)need("DC",function()return require(RS.Framework.Features.Data.DataController)end)need("EntryRegistry",function()pcall(function()require(RS.Framework.Features.Inventory.EntryTypes)end)return require(RS.Framework.Features.Inventory.EntryRegistry)end)need("PlotConfig",function()return require(RS.Framework.Features.Plot.PlotConfig)end)need("UnitUtil",function()return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitUtil)end)need("UnitController",function()return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitController)end)need("Upgrades",function()return require(RS.Framework.Features.Upgrades.Upgrades)end)need("Rebirths",function()return require(RS.Framework.Features.Rebirth.Rebirths)end)need("DiceMod",function()return require(RS.Framework.Features.Rolling.Dice)end)need("TowersMod",function()return require(RS.Framework.Features.Towers.Towers)end)need("BoostConfig",function()return require(RS.Framework.Features.Inventory.Kinds.Boost.BoostConfig)end)need("QuestConfig",function()return require(RS.Framework.Features.Quests.QuestConfig)end)need("GradesMod",function()return require(RS.Framework.Features.Grades.Grades)end)need("TraitsMod",function()return require(RS.Framework.Features.Traits.Traits)end)need("Mutations",function()return require(RS.Framework.Features.Inventory.Kinds.Unit.Mutations)end)need("UIRefs",function()return require(RS.Framework.Features.UI.UIReferences)end)need("NF",function()return require(RS.Packages.NumberFormatter)end)local function plotComm()return G.Network.ClientComm.new(RS.Network,false,"PlotService")end local function svcComm(svc)return G.Network.ClientComm.new(RS.Network,false,svc)end local Sig,Fn={},{}local function getSig(svc,name)local k=svc.."/"..name if Sig[k]then return Sig[k]end local ok,s=pcall(function()return svcComm(svc):GetSignal(name)end)if ok and s then Sig[k]=s return s end return nil end local function getFn(svc,name)local k=svc.."/"..name if Fn[k]then return Fn[k]end local ok,f=pcall(function()return svcComm(svc):GetFunction(name)end)if ok and f then Fn[k]=f return f end return nil end local function buyUpgradeSig()if Sig.BuyUpgrade then return Sig.BuyUpgrade end local ok,s=pcall(function()return G.Network.Client.GetSignal(RS.Network,"BuyUpgrade")end)if ok and s then Sig.BuyUpgrade=s return s end return nil end G.ok=G.Network~=nil and G.DC~=nil local function log(...)print("[AnimeDiceHub]",...)end local function notify(title,content)pcall(function()window:Notify({title=title,content=content,duration=4})end)end local function money()local ok,v=pcall(function()return G.DC.Money()end)return ok and(tonumber(v)or 0)or 0 end local function rebirth()local ok,v=pcall(function()return G.DC.Rebirth()end)return ok and(tonumber(v)or 0)or 0 end local function slots()local ok,v=pcall(function()return G.DC.Slots()end)return(ok and type(v)=="table")and v or{}end local function inventory()local ok,v=pcall(function()return G.DC.Inventory()end)return(ok and type(v)=="table")and v or{}end local function invEntry(key)local e local ok=pcall(function()e=G.DC.Inventory[key]()end)if ok and e then return e end return inventory()[key]end local function equippedKey()local ok,v=pcall(function()return G.UnitController.EquippedUnit()end)return ok and v or nil end local function unitChance(entry)if not entry or type(entry)~="table"then return 0 end local ok,cfg=pcall(function()return G.EntryRegistry.getEntryConfig(entry.name)end)if not ok or not cfg or cfg.kind~="Unit"then return 0 end local ok2,ch=pcall(function()return cfg.chance(entry.attributes)end)return(ok2 and tonumber(ch))or 0 end local function isUnitEntry(entry)if not entry or type(entry)~="table"or not entry.name then return false end local ok,cfg=pcall(function()return G.EntryRegistry.getEntryConfig(entry.name)end)return ok and cfg and cfg.kind=="Unit"end local function unlockedSlots()local list,s={},slots()local maxS=14 pcall(function()maxS=G.PlotConfig.GetMaxSlots()end)local rb=rebirth()for i=1,maxS do local req=0 pcall(function()req=G.PlotConfig.GetSlotRebirthRequirement(i)end)if rb>=req then table.insert(list,i)end end return list,s end local function parseCompact(text)if not text or text==""then return 0 end local clean=tostring(text):gsub("%$",""):gsub(",",""):gsub("%s+","")if clean==""then return 0 end local ok,v=pcall(function()return G.NF.ParseCompact(clean)end)if ok and tonumber(v)then return tonumber(v)end local num,suf=clean:lower():match("^([%d%.]+)([a-z]*)$")num=tonumber(num)if not num then return nil end local mult={k=1e3,m=1e6,b=1e9,t=1e12,q=1e15,qd=1e15,qn=1e18,aa=1e18}return num*(mult[suf]or 1)end local function fmt(n)local ok,v=pcall(function()return G.NF.FormatCompact(n)end)return(ok and v)or tostring(n)end local function applySellInput(text)if not text or text:gsub("%s","")==""then F.sellThreshold=0 notify("Auto Sell","Threshold off.")if F.sellSync then local s=getSig("SellService","UpdateAutoSell")if s then pcall(function()s:Fire(0)end)end end return end local v=parseCompact(text)if v and v>=0 then F.sellThreshold=v notify("Auto Sell","Threshold: "..fmt(v).." (1 in "..fmt(v)..")")if F.sellSync then local s=getSig("SellService","UpdateAutoSell")if s then pcall(function()s:Fire(v)end)end end else notify("Auto Sell","Not understood, e.g. 1t")end end local function applyTradeInput(text)if not text or text:gsub("%s","")==""then F.tradeMoney=0 notify("Trade","Min money off.")return end local v=parseCompact(text)if v and v>0 then F.tradeMoney=v notify("Trade","Min money: "..fmt(v))else notify("Trade","Not understood, e.g. 1b")end end local function rolls()local ok,v=pcall(function()return G.DC.Rolls()end)return ok and(tonumber(v)or 0)or 0 end local function setStat(h,v)v=tonumber(v)or 0 if h.value~=v then h:Set(v)end end local function waitVerify(fn,timeout)timeout=timeout or 3 local t=0 while t<timeout do local ok,r=pcall(fn)if ok and r then return true end task.wait(0.25)t=t+(0.25)end return false end local UIS=game:GetService("UserInputService")local TS=game:GetService("TeleportService")local HTS=game:GetService("HttpService")local CFG_FOLDER="AnimeDiceHub"local lastCfgSaved=""local function cfgPath()return CFG_FOLDER.."/config_"..tostring(LocalPlayer.UserId)..".json"end local function saveNow()if typeof(writefile)~="function"or typeof(makefolder)~="function"then return false end pcall(function()makefolder(CFG_FOLDER)end)local ok,txt=pcall(function()return HTS:JSONEncode({v=1,F=F,thresholdText=(U.sellInput and U.sellInput.value)or"",tradeText=(U.tradeInput and U.tradeInput.value)or"",rollMinText=(U.rollMinT and U.rollMinT.value)or""})end)if not ok or txt==lastCfgSaved then return false end local ok2=pcall(function()writefile(cfgPath(),txt)end)if ok2 then lastCfgSaved=txt end return ok2 end local function applyWS()local hum=LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")if hum then hum.WalkSpeed=(F.wsOn and F.wsValue)or 16 end end local flyGyro,flyVel,flyMoveConn,flyKeys=nil,nil,nil,{}local function flyStop()if flyMoveConn then pcall(function()flyMoveConn:Disconnect()end)flyMoveConn=nil end if flyGyro then pcall(function()flyGyro:Destroy()end)flyGyro=nil end if flyVel then pcall(function()flyVel:Destroy()end)flyVel=nil end table.clear(flyKeys)end local function flyStart()flyStop()local ch=LocalPlayer.Character local hrp=ch and ch:FindFirstChild("HumanoidRootPart")local hum=ch and ch:FindFirstChildOfClass("Humanoid")if not hrp or not hum then return end hum.PlatformStand=true flyGyro=Instance.new("BodyGyro")flyGyro.P=9000 flyGyro.MaxTorque=Vector3.new(9e9,9e9,9e9)flyGyro.CFrame=hrp.CFrame flyGyro.Parent=hrp flyVel=Instance.new("BodyVelocity")flyVel.MaxForce=Vector3.new(9e9,9e9,9e9)flyVel.Velocity=Vector3.zero flyVel.Parent=hrp flyMoveConn=game:GetService("RunService").RenderStepped:Connect(function()if not F.flyOn then return end local cam=workspace.CurrentCamera if not cam then return end local dir=Vector3.zero if flyKeys[Enum.KeyCode.W]then dir=dir+(cam.CFrame.LookVector)end if flyKeys[Enum.KeyCode.S]then dir=dir-(cam.CFrame.LookVector)end if flyKeys[Enum.KeyCode.A]then dir=dir-(cam.CFrame.RightVector)end if flyKeys[Enum.KeyCode.D]then dir=dir+(cam.CFrame.RightVector)end if flyKeys[Enum.KeyCode.Space]then dir=dir+(Vector3.new(0,1,0))end if flyKeys[Enum.KeyCode.LeftShift]then dir=dir-(Vector3.new(0,1,0))end if dir.Magnitude>0 then dir=dir.Unit*F.flySpeed end pcall(function()flyVel.Velocity=dir flyGyro.CFrame=cam.CFrame end)end)end local function setFly(on)F.flyOn=on if not on then flyStop()local hum=LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")if hum then hum.PlatformStand=false end return end flyStart()end UIS.InputBegan:Connect(function(i,g)if g or not F.flyOn then return end if UIS:GetFocusedTextBox()then return end flyKeys[i.KeyCode]=true end)UIS.InputEnded:Connect(function(i)flyKeys[i.KeyCode]=nil end)charConn=LocalPlayer.CharacterAdded:Connect(function()task.wait(1)applyWS()if F.flyOn then flyStart()end end)noclipConn=game:GetService("RunService").Stepped:Connect(function()if not F.noclip then return end local ch=LocalPlayer.Character if ch then for _,p in ipairs(ch:GetDescendants())do if p:IsA("BasePart")then p.CanCollide=false end end end end)afkConn=LocalPlayer.Idled:Connect(function()if F.afk then pcall(function()local vu=game:GetService("VirtualUser")vu:CaptureController()vu:ClickButton2(Vector2.new())end)end end)TS.TeleportInitFailed:Connect(function(_,_,msg)notify("Teleport","Failed: "..tostring(msg))end)local function fpsBoost()pcall(function()game:GetService("Lighting").GlobalShadows=false for _,o in ipairs(workspace:GetDescendants())do if o:IsA("ParticleEmitter")or o:IsA("Trail")or o:IsA("Beam")or o:IsA("Smoke")or o:IsA("Fire")or o:IsA("Sparkles")then o.Enabled=false elseif o:IsA("Decal")or o:IsA("Texture")then o.Transparency=1 end end end)notify("Performance","FPS Boost applied.")end local function hopNotePath()return CFG_FOLDER.."/lasthop_"..tostring(LocalPlayer.UserId)..".json"end local function readHopNote()if typeof(readfile)~="function"or typeof(isfile)~="function"then return nil end local okE,has=pcall(function()return isfile(hopNotePath())end)if not(okE and has)then return nil end local okR,txt=pcall(readfile,hopNotePath())if not okR then return nil end local okD,d=pcall(function()return HTS:JSONDecode(txt)end)if okD and type(d)=="table"then return d end return nil end local function writeHopNote(job,tries)if typeof(writefile)~="function"then return end pcall(function()makefolder(CFG_FOLDER)end)pcall(function()writefile(hopNotePath(),HTS:JSONEncode({job=job,tries=tries,time=os.time()}))end)end local function doRejoin(sameServer)if not sameServer then pcall(function()TS:Teleport(game.PlaceId,LocalPlayer)end)return end task.spawn(function()notify("Rejoin","Rejoining this server...")for attempt=1,3 do local myJob=game.JobId pcall(function()TS:TeleportToPlaceInstance(game.PlaceId,myJob,LocalPlayer)end)local t=0 while t<10 do task.wait(1)t=t+(1)if game.JobId~=myJob then return end end if attempt<3 then notify("Rejoin","Retrying... ("..attempt.."/3)")end end notify("Rejoin","Same-server blocked, hopping public...")task.wait(1)pcall(function()TS:Teleport(game.PlaceId,LocalPlayer)end)end)end local function doHop(lowPop)task.spawn(function()notify("Server Hop","Searching servers...")local cands,cursor,pages={},nil,0 while pages<3 do local url="https://games.roblox.com/v1/games/"..tostring(game.GameId).."/servers/Public?sortOrder=Asc&limit=100"if cursor then url=url.."&cursor="..cursor end local ok,res=pcall(function()return game:HttpGet(url)end)if not ok then break end local ok2,data=pcall(function()return HTS:JSONDecode(res)end)if not(ok2 and data and data.data)then break end for _,s in ipairs(data.data)do if s.id~=game.JobId and(tonumber(s.playing)or 0)<(tonumber(s.maxPlayers)or 99)then table.insert(cands,s)end end cursor=data.nextPageCursor pages+=1 if not cursor then break end end if#cands==0 then local tries=0 local note=readHopNote()if note and note.job==game.JobId then tries=tonumber(note.tries)or 0 end if tries>=3 then writeHopNote(game.JobId,0)notify("Server Hop","Same server 3 times, staying.")return end writeHopNote(game.JobId,tries+1)notify("Server Hop","List empty, hopping random...")pcall(function()TS:Teleport(game.PlaceId,LocalPlayer)end)return end if lowPop then table.sort(cands,function(a,b)return(a.playing or 0)<(b.playing or 0)end)end local pick=lowPop and cands[1]or cands[math.random(1,#cands)]notify("Server Hop","Teleporting ("..tostring(pick.playing).." players)...")pcall(function()TS:TeleportToPlaceInstance(game.PlaceId,pick.id,LocalPlayer)end)end)end local autoexecArmed=false local function armReexec()if autoexecArmed then return end if not F.reexec then return end if AUTOEXEC_CODE:find("PASTE_YOUR")then notify("AutoExec","Paste your loadstring into AUTOEXEC_CODE first.")return end autoexecArmed=true local q=queue_on_teleport or queueonteleport if typeof(q)=="function"then pcall(q,AUTOEXEC_CODE)else notify("AutoExec","queue_on_teleport not supported.")end end local rollHideConns={}local function rollHideBackup(on)for _,c in ipairs(rollHideConns)do pcall(function()c:Disconnect()end)end table.clear(rollHideConns)if not on then return end pcall(function()local R=G.UIRefs.Root.Rolling for _,inst in ipairs({R.Frame,R.DarkBackground})do if inst.Visible then inst.Visible=false end table.insert(rollHideConns,inst:GetPropertyChangedSignal("Visible"):Connect(function()if F.hideRolls and inst.Visible then inst.Visible=false end end))end end)end local function pressHiddenRoll()local ok,btn=pcall(function()return G.UIRefs.Root.Rolling.Options.HiddenRoll end)if not ok or not btn or typeof(getconnections)~="function"then return false end local okC,conns=pcall(getconnections,btn.Activated)if not okC or type(conns)~="table"then return false end for _,c in ipairs(conns)do pcall(function()c.Function()end)end task.wait(0.7)return true end local function isRollHidden()local a,b=nil,nil pcall(function()a=G.UIRefs.Root.Rolling.Frame.Position end)task.wait(0.25)pcall(function()b=G.UIRefs.Root.Rolling.Frame.Position end)if not a or not b then return nil end if math.abs(a.Y.Scale-b.Y.Scale)>0.05 or math.abs(a.Y.Offset-b.Y.Offset)>20 then return nil end return b.Y.Offset>50 end local function syncRollHidden()for _=1,2 do local cur=isRollHidden()if cur==nil then return end if cur==F.hideRolls then return end if not pressHiddenRoll()then return end end end local function setTowerHiddenUI()pcall(function()local S=G.UIRefs.Root.Tower.Screen S.Visible=false local bg=S.Parent:FindFirstChild("Background")if bg then bg.Visible=false end end)end local gradeByLabel,traitByLabel,gradeUnitByLabel,traitUnitByLabel={},{},{},{}local function buildGradeOptions()local t={}if G.GradesMod then for name,g in pairs(G.GradesMod)do if type(g)=="table"and g.order then table.insert(t,{name=name,order=g.order,mult=g.incomeMultiplier})end end end if#t==0 then return{"(unavailable)"}end table.sort(t,function(a,b)return a.order<b.order end)local out={}for _,g in ipairs(t)do local lbl=g.name.." (x"..tostring(g.mult)..")"gradeByLabel[lbl]=g.name table.insert(out,lbl)end return out end local function traitBuffText(t)local im,dm,hm=t.incomeMultiplier,t.damageMultiplier,t.healthMultiplier if im and im==dm and im==hm then return"x"..tostring(im).." all"end local p={}if im then table.insert(p,"x"..tostring(im).." income")end if dm then table.insert(p,"x"..tostring(dm).." dmg")end if hm then table.insert(p,"x"..tostring(hm).." hp")end return table.concat(p,"+")end local function buildTraitOptions()local t={}if G.TraitsMod then for name,tr in pairs(G.TraitsMod)do if type(tr)=="table"and tr.order then table.insert(t,{name=name,order=tr.order,ref=tr})end end end if#t==0 then return{"(unavailable)"}end table.sort(t,function(a,b)return a.order<b.order end)local out={}for _,tr in ipairs(t)do local lbl=tr.name.." ("..traitBuffText(tr.ref)..")"traitByLabel[lbl]=tr.name table.insert(out,lbl)end return out end local function ownedUnitNames()local counts={}for _,e in pairs(inventory())do if isUnitEntry(e)then counts[e.name]=(counts[e.name]or 0)+1 end end return counts end local function buildUnitOptions(counts,map)local labels={}for k in pairs(map)do map[k]=nil end for name,c in pairs(counts)do local lbl=name.." ("..c..")"map[lbl]=name table.insert(labels,lbl)end table.sort(labels)return labels end local function refreshUnitDrop(drop,map,keepNames)if not drop then return end local keep={}for _,n in ipairs(keepNames)do keep[n]=true end drop:Refresh(buildUnitOptions(ownedUnitNames(),map))local resel={}for lbl,n in pairs(map)do if keep[n]then table.insert(resel,lbl)end end if#resel>0 then drop:Set(resel)end end local function currencyAmount(name)local total=0 for _,e in pairs(inventory())do if type(e)=="table"and e.name==name then total=total+(tonumber(e.amount)or 0)end end return total end local thumbCache={}local function thumbOf(asset)local id=tostring(asset or""):match("%d+")if not id then return nil end if thumbCache[id]~=nil then return thumbCache[id]or nil end local url="https://thumbnails.roblox.com/v1/assets?assetIds="..id.."&size=150x150&format=Png"local ok,res=pcall(function()return game:HttpGet(url)end)if ok then local ok2,data=pcall(function()return HTS:JSONDecode(res)end)local img=ok2 and data and data.data and data.data[1]and data.data[1].imageUrl if type(img)=="string"and img~=""then thumbCache[id]=img return img end end thumbCache[id]=false return nil end local function hookColorInt(cfg)local hex=nil pcall(function()local g=cfg and cfg.gradient if g and g.Keypoints and g.Keypoints[1]then hex=g.Keypoints[1].Value:ToHex()end end)return tonumber(hex,16)or 0x808080 end local function postWebhook(url,payload)if type(url)~="string"or not url:find("^https?://")then return false end local okB,body=pcall(function()return HTS:JSONEncode(payload)end)if not okB then return false end if typeof(request)=="function"then local ok=pcall(function()request({Url=url,Method="POST",Headers={["Content-Type"]="application/json"},Body=body})end)return ok elseif typeof(http_request)=="function"then local ok=pcall(function()http_request({Url=url,Method="POST",Headers={["Content-Type"]="application/json"},Body=body})end)return ok end return false end local function hookStamp()return os.date("!%Y-%m-%dT%H:%M:%S.000Z")end local function sendRollHook(url,e,cfg,chance)local at=e.attributes or{}local mut=at.mutation local thumb=nil if mut and G.Mutations and G.Mutations[mut]then thumb=thumbOf(G.Mutations[mut].image)end if not thumb then local cur,all=nil,nil pcall(function()cur=G.DC.Dice()end)pcall(function()all=G.DiceMod.GetAll()end)if cur and all and all[cur]then thumb=thumbOf(all[cur].image)end end local fields={{name="Chance",value="1 in "..fmt(chance),inline=true},{name="Mutation",value=tostring(mut or"None"),inline=true},}if at.grade then table.insert(fields,{name="Grade",value=tostring(at.grade),inline=true})end if at.trait then table.insert(fields,{name="Trait",value=tostring(at.trait),inline=true})end local emb={title=e.name.." rolled!",fields=fields,color=hookColorInt(cfg),footer={text=LocalPlayer.DisplayName},timestamp=hookStamp(),}if thumb then emb.thumbnail={url=thumb}end return postWebhook(url,{username="Anime Dice Hub",embeds={emb}})end local function anyRollHook()return F.rollHookOn and true or false end local function onNewEntry(key)if not anyRollHook()then return end local e=invEntry(key)if not e or not isUnitEntry(e)then return end local ok,cfg=pcall(function()return G.EntryRegistry.getEntryConfig(e.name)end)if not ok or not cfg then return end local chance=0 pcall(function()chance=cfg.chance(e.attributes)or 0 end)if F.rollHookOn then local url=F.rollHookUrl local min=tonumber(F.rollHookMin)or 0 if type(url)=="string"and url~=""and min>0 and chance>=min then task.spawn(function()sendRollHook(url,e,cfg,chance)end)end end end local function watchRolls()pcall(function()rollWatchConn=G.DC.Inventory.OnKeyAdded(function(key)task.spawn(function()onNewEntry(key)end)end)end)end local function sendStatsHook(url)local wins=0 for _,w in pairs(Stats.towerWins)do wins=wins+(tonumber(w)or 0)end local pots=0 local potNames={}pcall(function()for name in pairs(activePotions())do pots=pots+(1)table.insert(potNames,name)end end)table.sort(potNames)local potVal=tostring(pots)if#potNames>0 then local s=table.concat(potNames,", ")if#s>180 then s=s:sub(1,180).."..."end potVal=potVal.."\n"..s end local emb={title="Session Stats",fields={{name="Money",value=fmt(money()),inline=true},{name="Rolls",value=tostring(rolls()),inline=true},{name="Rebirth",value=tostring(rebirth()),inline=true},{name="Units Sold",value=tostring(Stats.sold or 0),inline=true},{name="Tower Wins",value=tostring(wins),inline=true},{name="Active Potions",value=potVal,inline=false},},color=0x4ADE80,footer={text=LocalPlayer.DisplayName},timestamp=hookStamp(),}local th=thumbOf("rbxassetid://93129522258096")if th then emb.thumbnail={url=th}end return postWebhook(url,{username="Anime Dice Hub",embeds={emb}})end local lastStatsHook=0 local function statsHookTick()if os.clock()-lastStatsHook<(tonumber(F.statHookInterval)or 300)then return end lastStatsHook=os.clock()if F.statHookOn then local url=F.statHookUrl if type(url)=="string"and url~=""then task.spawn(function()sendStatsHook(url)end)end end end window:CreateSection({name="Farm"})local tMain=window:CreateTab({name="Main",icon="rbxassetid://77304764857415"})local tUnits=window:CreateTab({name="Units",icon="rbxassetid://133003586374441"})local tUpg=window:CreateTab({name="Upgrades",icon="rbxassetid://73069486155895"})local tDice=window:CreateTab({name="Dice",icon="rbxassetid://134876970337785"})local tSell=window:CreateTab({name="Sell",icon="rbxassetid://118330449034393"})local tTower=window:CreateTab({name="Tower",icon="rbxassetid://95008289608947"})local tPotion=window:CreateTab({name="Potion",icon="rbxassetid://92709571106091"})local tReroll=window:CreateTab({name="Reroll",icon="rbxassetid://138588191124173"})window:CreateSection({name="Info"})local tStats=window:CreateTab({name="Stats",icon="rbxassetid://93129522258096"})local tChanges=window:CreateTab({name="Changelogs",icon="rbxassetid://112634880544308"})window:CreateSection({name="System"})local tSettings=window:CreateTab({name="Settings",icon="rbxassetid://103326255092488"})local tHooks=window:CreateTab({name="Webhook",icon="rbxassetid://137296756955034"})tMain:CreateDivider({text="Money Collection"})local collectLine=tMain:CreateConsole({name="Collected Total",height=48,text="Total collected: 0"})U.collect=tMain:CreateToggle({name="Auto Collect Money",value=false,callback=function(v)F.collect=v end})U.collectDelay=tMain:CreateSlider({name="Collect Delay",range={0.1,15},increment=0.1,value=2,suffix="s",callback=function(v)F.collectDelay=v end})tMain:CreateDivider({text="Rebirth"})U.rebirth=tMain:CreateToggle({name="Auto Rebirth",value=false,callback=function(v)F.rebirth=v end})U.rebirthDelay=tMain:CreateSlider({name="Rebirth Check",range={0.1,30},increment=0.1,value=5,suffix="s",callback=function(v)F.rebirthDelay=v end})tMain:CreateButton({name="Rebirth Now",callback=function()local s=getSig("RebirthService","Rebirth")if s then local ok,err=pcall(function()s:Fire()end)notify("Rebirth",ok and"Request sent."or("Error: "..tostring(err)))end end})tMain:CreateDivider({text="Roll"})U.autoRoll=tMain:CreateToggle({name="Auto Roll",value=false,callback=function(v)F.autoRoll=v local s=getSig("RollService","SetAutoRoll")if s then pcall(function()s:Fire(v)end)end end})U.hideRolls=tMain:CreateToggle({name="Auto Hide Rolls",value=false,callback=function(v)F.hideRolls=v syncRollHidden()rollHideBackup(v)end})U.claimQuests=tMain:CreateToggle({name="Auto Claim Quests",value=false,callback=function(v)F.claimQuests=v end})tMain:CreateButton({name="Claim Quests Now",callback=function()task.spawn(doClaimQuests)end})tUnits:CreateDivider({text="Levels (Level Up)"})U.levelup=tUnits:CreateToggle({name="Auto Level Up",value=false,callback=function(v)F.levelup=v end})U.maxLevel=tUnits:CreateSlider({name="Max Unit Level",range={1,99},increment=1,value=40,callback=function(v)F.maxLevel=math.floor(v)end})U.levelDelay=tUnits:CreateSlider({name="Level Delay",range={0.1,15},increment=0.1,value=2.5,suffix="s",callback=function(v)F.levelDelay=v end})tUnits:CreateDivider({text="Place Best Units"})U.placeBest=tUnits:CreateToggle({name="Auto Place Best",value=false,callback=function(v)F.placeBest=v end})U.replaceWorst=tUnits:CreateToggle({name="Replace Worst When Full",value=true,callback=function(v)F.replaceWorst=v end})U.placeDelay=tUnits:CreateSlider({name="Place Check",range={0.1,30},increment=0.1,value=5,suffix="s",callback=function(v)F.placeDelay=v end})tUnits:CreateButton({name="Game's EquipBest (one-shot)",callback=function()local s=getSig("PlotService","EquipBest")if s then pcall(function()s:Fire()end)end end})tUpg:CreateDivider({text="Skill Tree"})U.upgrades=tUpg:CreateToggle({name="Auto Upgrades",value=false,callback=function(v)F.upgrades=v end})U.upgradeDelay=tUpg:CreateSlider({name="Upgrade Delay",range={0.1,10},increment=0.1,value=2,suffix="s",callback=function(v)F.upgradeDelay=v end})U.upgCats=tUpg:CreateDropdown({name="Category Filter",multiSelect=true,options={"Money","Luck","Fortune","Damage","Roll Speed","Sell","Unit Storage","Health","Walkspeed","Income"},value={},callback=function(sel)F.upgradeCats=(type(sel)=="table")and sel or{}end})tDice:CreateDivider({text="Dice Shop"})U.buyDice=tDice:CreateToggle({name="Auto Buy Best Dice",value=false,callback=function(v)F.buyDice=v end})U.equipDice=tDice:CreateToggle({name="Auto Equip Best Dice",value=true,callback=function(v)F.equipDice=v end})U.diceDelay=tDice:CreateSlider({name="Dice Check",range={0.1,30},increment=0.1,value=5,suffix="s",callback=function(v)F.diceDelay=v end})tSell:CreateDivider({text="Auto Sell Threshold"})U.sellInput=tSell:CreateInput({name="Rarity Threshold (e.g. 1t)",value="",placeholder="e.g. 1t, 500b, 10q",callback=function(text)applySellInput(text)end})tSell:CreateButton({name="Set Threshold",callback=function()applySellInput(U.sellInput and U.sellInput.value or"")end})U.sellSync=tSell:CreateToggle({name="Apply Threshold To Game",value=false,callback=function(v)F.sellSync=v local s=getSig("SellService","UpdateAutoSell")if v and F.sellThreshold>0 then if s then pcall(function()s:Fire(F.sellThreshold)end)end elseif v then notify("Auto Sell","Write a threshold first.")else if s then pcall(function()s:Fire(0)end)end notify("Auto Sell","Game auto-sell off.")end end})tSell:CreateDivider({text="Instant Bulk Sell"})U.sellAuto=tSell:CreateToggle({name="Auto Instant Sell",value=false,callback=function(v)F.sellAuto=v end})U.sellDelay=tSell:CreateSlider({name="Sell Check",range={0.1,60},increment=0.1,value=10,suffix="s",callback=function(v)F.sellDelay=v end})U.keepBest=tSell:CreateSlider({name="Keep Top N",range={0,25},increment=1,value=0,callback=function(v)F.keepBest=math.floor(v)end})tSell:CreateButton({name="Sell Now (below threshold)",callback=function()task.spawn(function()doInstantSell()end)end})tTower:CreateDivider({text="Tower Selection"})local towerNames={"Dragon Tower","Cursed Tower","Pirate Tower","Hidden Leaf Tower","Infinity Tower"}local towerByLabel={}local function towerLabel(name)local diff=nil pcall(function()local t=G.TowersMod.Get(name)if t and t.difficulty and t.difficulty.name then diff=t.difficulty.name end end)return diff and(name.." ["..diff.."]")or name end pcall(function()local all=G.TowersMod.GetAll()local tmp={}for k in pairs(all)do table.insert(tmp,k)end table.sort(tmp,function(a,b)local oa,ob=99,99 pcall(function()oa=G.TowersMod.Get(a).order or 99 end)pcall(function()ob=G.TowersMod.Get(b).order or 99 end)if oa==ob then return a<b end return oa<ob end)if#tmp>0 then towerNames=tmp end end)local towerLabels={}for _,n in ipairs(towerNames)do local lbl=towerLabel(n)towerByLabel[lbl]=n table.insert(towerLabels,lbl)end U.towerSel=tTower:CreateDropdown({name="Tower",options=towerLabels,value=towerLabels[1],callback=function(sel)local lbl=(type(sel)=="table")and(sel[1]or towerLabels[1])or sel F.towerName=towerByLabel[lbl]or lbl end})U.tower=tTower:CreateToggle({name="Auto Towers",value=false,callback=function(v)F.tower=v if not v then local c=getFn("Towers","CancelTower")if c then pcall(c)end end end})U.towerEquipBest=tTower:CreateToggle({name="Equip Best Tower Team",value=true,callback=function(v)F.towerEquipBest=v end})U.hideTower=tTower:CreateToggle({name="Auto Hide Tower",value=false,callback=function(v)F.hideTower=v end})U.towerDelay=tTower:CreateSlider({name="Floor Wait",range={0.1,5},increment=0.1,value=2,suffix="s",callback=function(v)F.towerDelay=v end})tTower:CreateButton({name="Stop Tower",callback=function()F.tower=false local c=getFn("Towers","CancelTower")if c then pcall(c)end end})local towerStat=tTower:CreateStat({name="Tower Wins",value=0,icon="rbxassetid://95008289608947",changeMode="absolute"})local floorStat=tTower:CreateStat({name="Tower Steps",value=0,icon="rbxassetid://112002461760953",changeMode="absolute"})local floorNowStat=tTower:CreateStat({name="Tower Floor",value=0,icon="rbxassetid://95008289608947",changeMode="absolute"})tPotion:CreateDivider({text="Auto Potion"})U.potionAuto=tPotion:CreateToggle({name="Auto Potion",value=false,callback=function(v)F.potionAuto=v end})local potDrop,potByLabel=nil,{}local function potBuffText(e)local parts={}for bn,b in pairs(e.buffs or{})do table.insert(parts,"x"..tostring(b.amount).." "..(bn:gsub(" Multiplier","")))end table.sort(parts)return table.concat(parts,"+")end local function potDurText(d)d=tonumber(d)or 0 if d%60==0 then return(d/60).."m"end return tostring(math.floor(d/6)/10).."m"end local function buildPotOptions(withCount)local labels={}potByLabel={}if not G.BoostConfig or not G.BoostConfig.entries then return{"(potion list failed to load)"}end local counts={}if withCount then for _,e in pairs(inventory())do if type(e)=="table"and e.name then counts[e.name]=tonumber(e.amount)or 0 end end end for name,e in pairs(G.BoostConfig.entries)do local lbl=name.." [T"..tostring(e.tier).." | "..potBuffText(e).." | "..potDurText(e.duration).."]"if withCount then lbl=lbl.." ("..(counts[name]or 0).." owned)"end potByLabel[lbl]=name table.insert(labels,lbl)end table.sort(labels)return labels end potDrop=tPotion:CreateDropdown({name="Potions",multiSelect=true,options=buildPotOptions(false),value={},callback=function(sel)F.potions={}if type(sel)=="table"then for _,lbl in ipairs(sel)do local n=potByLabel[lbl]if n then table.insert(F.potions,n)end end end end})U.potions=potDrop U.potionBest=tPotion:CreateToggle({name="Best Per Category",description="Uses the highest owned tier per category. Lower tiers would be wasted, since only the highest tier per category applies in-game.",value=true,callback=function(v)F.potionBest=v end})U.potionExtend=tPotion:CreateToggle({name="Extend While Active",description="If on, re-uses the same potion before it expires and extends its duration. If off, waits for expiry.",value=false,callback=function(v)F.potionExtend=v end})U.potionDelay=tPotion:CreateSlider({name="Potion Check",range={0.1,30},increment=0.1,value=5,suffix="s",callback=function(v)F.potionDelay=v end})tPotion:CreateButton({name="Use Now (selected)",callback=function()task.spawn(function()doPotionTick()end)end})tPotion:CreateButton({name="Show Active",callback=function()showPotions()end})tPotion:CreateButton({name="Refresh List (show counts)",callback=function()if not potDrop then return end local keep={}for _,n in ipairs(F.potions)do keep[n]=true end potDrop:Refresh(buildPotOptions(true))local resel={}for lbl,n in pairs(potByLabel)do if keep[n]then table.insert(resel,lbl)end end if#resel>0 then potDrop:Set(resel)end end})tReroll:CreateDivider({text="Auto Grade"})U.gradeAuto=tReroll:CreateToggle({name="Auto Grade",description="Rolls grades until a target grade hits. Protected grades (S+) are never rolled away.",value=false,callback=function(v)F.gradeAuto=v end})U.gradeTargets=tReroll:CreateDropdown({name="Target Grades",multiSelect=true,options=buildGradeOptions(),value={},callback=function(sel)F.gradeTargets={}if type(sel)=="table"then for _,lbl in ipairs(sel)do local n=gradeByLabel[lbl]if n then table.insert(F.gradeTargets,n)end end end end})U.gradeUnits=tReroll:CreateDropdown({name="Grade Units",multiSelect=true,options=buildUnitOptions(ownedUnitNames(),gradeUnitByLabel),value={},callback=function(sel)F.gradeUnits={}if type(sel)=="table"then for _,lbl in ipairs(sel)do local n=gradeUnitByLabel[lbl]if n then table.insert(F.gradeUnits,n)end end end end})tReroll:CreateButton({name="Refresh Grade Units",callback=function()refreshUnitDrop(U.gradeUnits,gradeUnitByLabel,F.gradeUnits)end})U.gradeAll=tReroll:CreateToggle({name="Grade: All Units",description="On: rolls every unit. Off: only selected Grade Units.",value=false,callback=function(v)F.gradeAll=v end})U.gradeDelay=tReroll:CreateSlider({name="Grade Delay",range={0.1,10},increment=0.1,value=2,suffix="s",callback=function(v)F.gradeDelay=v end})U.gemReserve=tReroll:CreateInput({name="Gem Reserve",description="Each grade roll costs 1 gem. Stops when gems reach this.",value="",numeric=true,placeholder="e.g. 100",callback=function(t)F.gemReserve=math.floor(tonumber(t)or 0)end})tReroll:CreateButton({name="Roll Grade Now",callback=function()task.spawn(function()doGradeTick(true)end)end})tReroll:CreateDivider({text="Auto Trait"})U.traitAuto=tReroll:CreateToggle({name="Auto Trait",description="Rolls traits until a target trait hits. Protected traits (Samurai+) are never rolled away.",value=false,callback=function(v)F.traitAuto=v end})U.traitTargets=tReroll:CreateDropdown({name="Target Traits",multiSelect=true,options=buildTraitOptions(),value={},callback=function(sel)F.traitTargets={}if type(sel)=="table"then for _,lbl in ipairs(sel)do local n=traitByLabel[lbl]if n then table.insert(F.traitTargets,n)end end end end})U.traitUnits=tReroll:CreateDropdown({name="Trait Units",multiSelect=true,options=buildUnitOptions(ownedUnitNames(),traitUnitByLabel),value={},callback=function(sel)F.traitUnits={}if type(sel)=="table"then for _,lbl in ipairs(sel)do local n=traitUnitByLabel[lbl]if n then table.insert(F.traitUnits,n)end end end end})tReroll:CreateButton({name="Refresh Trait Units",callback=function()refreshUnitDrop(U.traitUnits,traitUnitByLabel,F.traitUnits)end})U.traitAll=tReroll:CreateToggle({name="Trait: All Units",description="On: rolls every unit. Off: only selected Trait Units.",value=false,callback=function(v)F.traitAll=v end})U.traitDelay=tReroll:CreateSlider({name="Trait Delay",range={0.1,10},increment=0.1,value=2,suffix="s",callback=function(v)F.traitDelay=v end})U.rerollReserve=tReroll:CreateInput({name="Reroll Reserve",description="Each trait roll costs 1 reroll. Stops when rerolls reach this.",value="",numeric=true,placeholder="e.g. 50",callback=function(t)F.rerollReserve=math.floor(tonumber(t)or 0)end})local moneyStat=tStats:CreateStat({name="Money",value=money(),icon="rbxassetid://93129522258096",changeBaseline="initial"})local rollStat=tStats:CreateStat({name="Rolls",value=rolls(),icon="rbxassetid://134876970337785",changeBaseline="initial"})local soldStat=tStats:CreateStat({name="Sold",value=0,icon="rbxassetid://118330449034393",changeMode="absolute"})local potionStat=tStats:CreateStat({name="Active Potions",value=0,icon="rbxassetid://92709571106091",changeMode="absolute"})local console=tStats:CreateConsole({name="Log",height=160,follow=true,maxLines=120})local function clog(m)pcall(function()console:Append(m)end)end tChanges:CreateText({name='<b><font color="#4ade80">v1.0 - Release</font></b>',icon="rbxassetid://138588191124173",text=[[<font color="#4ade80">•</font> Auto Collect Money with live total counter
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+-- Paste your loadstring below (used by Auto Execute On Teleport in Settings):
+local AUTOEXEC_CODE = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/animedice.lua"))()]]
+
+if game.PlaceId ~= 113290951185459 then
+    error("[AnimeDiceHub] This script only works in Anime Dice.", 0)
+end
+do
+    local blocked = false
+    pcall(function()
+        if typeof(getgenv) == "function" then
+            local h = getgenv().ADH_Heartbeat
+            if type(h) == "table" and (os.clock() - (tonumber(h.t) or 0)) < 6 then
+                blocked = true
+            end
+        end
+    end)
+    if blocked then
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Anime Dice Hub", Text = "Already running.", Duration = 4 })
+        end)
+        warn("[AnimeDiceHub] Already running.")
+        return
+    end
+end
+pcall(function()
+    if typeof(getgenv) == "function" then
+        getgenv().ADH_Heartbeat = { t = os.clock() }
+    end
+end)
+local Rayfield
+do
+    local lastErr
+    for attempt = 1, 4 do
+        local ok, lib = pcall(function()
+            return loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+        end)
+        if ok and type(lib) == "table" and type(lib.CreateWindow) == "function" then
+            Rayfield = lib
+            break
+        end
+        lastErr = lib
+        if attempt < 4 then task.wait(2) end
+    end
+    if not Rayfield then
+        error("[AnimeDiceHub] Rayfield failed to load after 4 tries. Re-execute. Last error: " .. tostring(lastErr))
+    end
+end
+
+local window = Rayfield:CreateWindow({
+    name = "Anime Dice",
+    subtitle = "v1.0 | Perfectus",
+    sidebarLayout = true,
+    theme = "default",
+    icon = "rbxassetid://127883209471308",
+})
+
+-- ============ STATE ============
+local F = {
+    collect = false, collectDelay = 2,
+    levelup = false, maxLevel = 40, levelDelay = 2.5,
+    placeBest = false, placeDelay = 5, replaceWorst = true,
+    rebirth = false, rebirthDelay = 5,
+    upgrades = false, upgradeDelay = 2, upgradeCats = {},
+    buyDice = false, equipDice = true, diceDelay = 5,
+    autoRoll = false,
+    sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0,
+    tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2,
+    potionAuto = false, potionDelay = 5, potionBest = true, potionExtend = false, potions = {},
+    gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gemReserve = 0,
+    traitAuto = false, traitDelay = 2, traitTargets = {}, traitUnits = {}, traitAll = false, rerollReserve = 0,
+    statHookInterval = 300,
+    rollHookUrl = "", rollHookOn = false, rollHookMin = 0,
+    statHookUrl = "", statHookOn = false,
+    claimQuests = false, hideRolls = false,
+    tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
+    saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true,
+}
+local Alive = true
+local U = {} -- saved UI handles (for per-user config restore)
+local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
+local adhShutdown
+task.spawn(function()
+    if typeof(getgenv) ~= "function" then return end
+    while Alive do
+        pcall(function() getgenv().ADH_Heartbeat = { t = os.clock() } end)
+        task.wait(2)
+    end
+    pcall(function()
+        if typeof(getgenv) == "function" then getgenv().ADH_Heartbeat = nil end
+    end
+end)
+local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
+local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
+local doInstantSell, doPotionTick, showPotions, doClaimQuests, doGradeTick, doTraitTick -- forward declarations (defined below)
+
+-- ============ GAME REFS (safe resolution) ============
+local G = { ok = false, missing = {} }
+local function need(name, fn)
+    local ok, v = pcall(fn)
+    if ok and v ~= nil then G[name] = v return v end
+    table.insert(G.missing, name)
+    return nil
+end
+need("Network", function() return require(RS.Packages.Network) end)
+need("DC", function() return require(RS.Framework.Features.Data.DataController) end)
+need("EntryRegistry", function()
+    pcall(function() require(RS.Framework.Features.Inventory.EntryTypes) end)
+    return require(RS.Framework.Features.Inventory.EntryRegistry)
+end)
+need("PlotConfig", function() return require(RS.Framework.Features.Plot.PlotConfig) end)
+need("UnitUtil", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitUtil) end)
+need("UnitController", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitController) end)
+need("Upgrades", function() return require(RS.Framework.Features.Upgrades.Upgrades) end)
+need("Rebirths", function() return require(RS.Framework.Features.Rebirth.Rebirths) end)
+need("DiceMod", function() return require(RS.Framework.Features.Rolling.Dice) end)
+need("TowersMod", function() return require(RS.Framework.Features.Towers.Towers) end)
+need("BoostConfig", function() return require(RS.Framework.Features.Inventory.Kinds.Boost.BoostConfig) end)
+need("QuestConfig", function() return require(RS.Framework.Features.Quests.QuestConfig) end)
+-- need("TradeConfig", function() return require(RS.Framework.Features.Trading.TradeConfig) end) -- TRADE DISABLED
+need("GradesMod", function() return require(RS.Framework.Features.Grades.Grades) end)
+need("TraitsMod", function() return require(RS.Framework.Features.Traits.Traits) end)
+need("Mutations", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.Mutations) end)
+need("UIRefs", function() return require(RS.Framework.Features.UI.UIReferences) end)
+need("NF", function() return require(RS.Packages.NumberFormatter) end)
+
+local function plotComm() return G.Network.ClientComm.new(RS.Network, false, "PlotService") end
+local function svcComm(svc) return G.Network.ClientComm.new(RS.Network, false, svc) end
+local Sig, Fn = {}, {}
+local function getSig(svc, name)
+    local k = svc .. "/" .. name
+    if Sig[k] then return Sig[k] end
+    local ok, s = pcall(function() return svcComm(svc):GetSignal(name) end)
+    if ok and s then Sig[k] = s return s end
+    return nil
+end
+local function getFn(svc, name)
+    local k = svc .. "/" .. name
+    if Fn[k] then return Fn[k] end
+    local ok, f = pcall(function() return svcComm(svc):GetFunction(name) end)
+    if ok and f then Fn[k] = f return f end
+    return nil
+end
+local function buyUpgradeSig()
+    if Sig.BuyUpgrade then return Sig.BuyUpgrade end
+    local ok, s = pcall(function() return G.Network.Client.GetSignal(RS.Network, "BuyUpgrade") end)
+    if ok and s then Sig.BuyUpgrade = s return s end
+    return nil
+end
+
+G.ok = G.Network ~= nil and G.DC ~= nil
+
+local function log(...) print("[AnimeDiceHub]", ...) end
+local function notify(title, content)
+    pcall(function() window:Notify({ title = title, content = content, duration = 4 }) end)
+end
+
+-- ============ HELPERS ============
+local function money() local ok, v = pcall(function() return G.DC.Money() end) return ok and (tonumber(v) or 0) or 0 end
+local function rebirth() local ok, v = pcall(function() return G.DC.Rebirth() end) return ok and (tonumber(v) or 0) or 0 end
+local function slots() local ok, v = pcall(function() return G.DC.Slots() end) return (ok and type(v) == "table") and v or {} end
+local function inventory() local ok, v = pcall(function() return G.DC.Inventory() end) return (ok and type(v) == "table") and v or {} end
+local function invEntry(key)
+    local e
+    local ok = pcall(function() e = G.DC.Inventory[key]() end)
+    if ok and e then return e end
+    return inventory()[key]
+end
+local function equippedKey()
+    local ok, v = pcall(function() return G.UnitController.EquippedUnit() end)
+    return ok and v or nil
+end
+local function unitChance(entry)
+    if not entry or type(entry) ~= "table" then return 0 end
+    local ok, cfg = pcall(function() return G.EntryRegistry.getEntryConfig(entry.name) end)
+    if not ok or not cfg or cfg.kind ~= "Unit" then return 0 end
+    local ok2, ch = pcall(function() return cfg.chance(entry.attributes) end)
+    return (ok2 and tonumber(ch)) or 0
+end
+local function isUnitEntry(entry)
+    if not entry or type(entry) ~= "table" or not entry.name then return false end
+    local ok, cfg = pcall(function() return G.EntryRegistry.getEntryConfig(entry.name) end)
+    return ok and cfg and cfg.kind == "Unit"
+end
+local function unlockedSlots()
+    local list, s = {}, slots()
+    local maxS = 14
+    pcall(function() maxS = G.PlotConfig.GetMaxSlots() end)
+    local rb = rebirth()
+    for i = 1, maxS do
+        local req = 0
+        pcall(function() req = G.PlotConfig.GetSlotRebirthRequirement(i) end)
+        if rb >= req then table.insert(list, i) end
+    end
+    return list, s
+end
+local function parseCompact(text)
+    if not text or text == "" then return 0 end
+    local clean = tostring(text):gsub("%$", ""):gsub(",", ""):gsub("%s+", "")
+    if clean == "" then return 0 end
+    local ok, v = pcall(function() return G.NF.ParseCompact(clean) end)
+    if ok and tonumber(v) then return tonumber(v) end
+    local num, suf = clean:lower():match("^([%d%.]+)([a-z]*)$")
+    num = tonumber(num)
+    if not num then return nil end
+    local mult = { k = 1e3, m = 1e6, b = 1e9, t = 1e12, q = 1e15, qd = 1e15, qn = 1e18, aa = 1e18 }
+    return num * (mult[suf] or 1)
+end
+local function fmt(n)
+    local ok, v = pcall(function() return G.NF.FormatCompact(n) end)
+    return (ok and v) or tostring(n)
+end
+local function applySellInput(text)
+    if not text or text:gsub("%s", "") == "" then
+        F.sellThreshold = 0
+        notify("Auto Sell", "Threshold off.")
+        if F.sellSync then local s = getSig("SellService", "UpdateAutoSell") if s then pcall(function() s:Fire(0) end) end end
+        return
+    end
+    local v = parseCompact(text)
+    if v and v >= 0 then
+        F.sellThreshold = v
+        notify("Auto Sell", "Threshold: " .. fmt(v) .. " (1 in " .. fmt(v) .. ")")
+        if F.sellSync then local s = getSig("SellService", "UpdateAutoSell") if s then pcall(function() s:Fire(v) end) end end
+    else notify("Auto Sell", "Not understood, e.g. 1t") end
+end
+local function applyTradeInput(text)
+    if not text or text:gsub("%s", "") == "" then
+        F.tradeMoney = 0
+        notify("Trade", "Min money off.")
+        return
+    end
+    local v = parseCompact(text)
+    if v and v > 0 then
+        F.tradeMoney = v
+        notify("Trade", "Min money: " .. fmt(v))
+    else notify("Trade", "Not understood, e.g. 1b") end
+end
+local function rolls() local ok, v = pcall(function() return G.DC.Rolls() end) return ok and (tonumber(v) or 0) or 0 end
+local function setStat(h, v)
+    v = tonumber(v) or 0
+    if h.value ~= v then h:Set(v) end
+end
+local function waitVerify(fn, timeout)
+    timeout = timeout or 3
+    local t = 0
+    while t < timeout do
+        local ok, r = pcall(fn)
+        if ok and r then return true end
+        task.wait(0.25) t += 0.25
+    end
+    return false
+end
+
+-- ---- Settings helpers: per-user config file + character + server ----
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TeleportService")
+local HTS = game:GetService("HttpService")
+local CFG_FOLDER = "AnimeDiceHub"
+local lastCfgSaved = ""
+local function cfgPath() return CFG_FOLDER .. "/config_" .. tostring(LocalPlayer.UserId) .. ".json" end
+local function saveNow()
+    if typeof(writefile) ~= "function" or typeof(makefolder) ~= "function" then return false end
+    pcall(function() makefolder(CFG_FOLDER) end)
+    local ok, txt = pcall(function()
+        return HTS:JSONEncode({ v = 1, F = F, thresholdText = (U.sellInput and U.sellInput.value) or "", tradeText = (U.tradeInput and U.tradeInput.value) or "",
+            rollMinText = (U.rollMinT and U.rollMinT.value) or "" })
+    end)
+    if not ok or txt == lastCfgSaved then return false end
+    local ok2 = pcall(function() writefile(cfgPath(), txt) end)
+    if ok2 then lastCfgSaved = txt end
+    return ok2
+end
+local function applyWS()
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = (F.wsOn and F.wsValue) or 16 end
+end
+local flyGyro, flyVel, flyMoveConn, flyKeys = nil, nil, nil, {}
+local function flyStop()
+    if flyMoveConn then pcall(function() flyMoveConn:Disconnect() end) flyMoveConn = nil end
+    if flyGyro then pcall(function() flyGyro:Destroy() end) flyGyro = nil end
+    if flyVel then pcall(function() flyVel:Destroy() end) flyVel = nil end
+    table.clear(flyKeys)
+end
+local function flyStart()
+    flyStop()
+    local ch = LocalPlayer.Character
+    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    hum.PlatformStand = true
+    flyGyro = Instance.new("BodyGyro")
+    flyGyro.P = 9000
+    flyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    flyGyro.CFrame = hrp.CFrame
+    flyGyro.Parent = hrp
+    flyVel = Instance.new("BodyVelocity")
+    flyVel.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    flyVel.Velocity = Vector3.zero
+    flyVel.Parent = hrp
+    flyMoveConn = game:GetService("RunService").RenderStepped:Connect(function()
+        if not F.flyOn then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local dir = Vector3.zero
+        if flyKeys[Enum.KeyCode.W] then dir += cam.CFrame.LookVector end
+        if flyKeys[Enum.KeyCode.S] then dir -= cam.CFrame.LookVector end
+        if flyKeys[Enum.KeyCode.A] then dir -= cam.CFrame.RightVector end
+        if flyKeys[Enum.KeyCode.D] then dir += cam.CFrame.RightVector end
+        if flyKeys[Enum.KeyCode.Space] then dir += Vector3.new(0, 1, 0) end
+        if flyKeys[Enum.KeyCode.LeftShift] then dir -= Vector3.new(0, 1, 0) end
+        if dir.Magnitude > 0 then dir = dir.Unit * F.flySpeed end
+        pcall(function()
+            flyVel.Velocity = dir
+            flyGyro.CFrame = cam.CFrame
+        end)
+    end)
+end
+local function setFly(on)
+    F.flyOn = on
+    if not on then
+        flyStop()
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+        return
+    end
+    flyStart()
+end
+UIS.InputBegan:Connect(function(i, g)
+    if g or not F.flyOn then return end
+    if UIS:GetFocusedTextBox() then return end
+    flyKeys[i.KeyCode] = true
+end)
+UIS.InputEnded:Connect(function(i) flyKeys[i.KeyCode] = nil end)
+charConn = LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    applyWS()
+    if F.flyOn then flyStart() end
+end)
+noclipConn = game:GetService("RunService").Stepped:Connect(function()
+    if not F.noclip then return end
+    local ch = LocalPlayer.Character
+    if ch then
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+end)
+afkConn = LocalPlayer.Idled:Connect(function()
+    if F.afk then pcall(function()
+        local vu = game:GetService("VirtualUser")
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new())
+    end) end
+end)
+TS.TeleportInitFailed:Connect(function(_, _, msg)
+    notify("Teleport", "Failed: " .. tostring(msg))
+end)
+local function fpsBoost()
+    pcall(function()
+        game:GetService("Lighting").GlobalShadows = false
+        for _, o in ipairs(workspace:GetDescendants()) do
+            if o:IsA("ParticleEmitter") or o:IsA("Trail") or o:IsA("Beam") or o:IsA("Smoke") or o:IsA("Fire") or o:IsA("Sparkles") then
+                o.Enabled = false
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                o.Transparency = 1
+            end
+        end
+    end)
+    notify("Performance", "FPS Boost applied.")
+end
+local function hopNotePath() return CFG_FOLDER .. "/lasthop_" .. tostring(LocalPlayer.UserId) .. ".json" end
+local function readHopNote()
+    if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return nil end
+    local okE, has = pcall(function() return isfile(hopNotePath()) end)
+    if not (okE and has) then return nil end
+    local okR, txt = pcall(readfile, hopNotePath())
+    if not okR then return nil end
+    local okD, d = pcall(function() return HTS:JSONDecode(txt) end)
+    if okD and type(d) == "table" then return d end
+    return nil
+end
+local function writeHopNote(job, tries)
+    if typeof(writefile) ~= "function" then return end
+    pcall(function() makefolder(CFG_FOLDER) end)
+    pcall(function() writefile(hopNotePath(), HTS:JSONEncode({ job = job, tries = tries, time = os.time() })) end)
+end
+local function doRejoin(sameServer)
+    if not sameServer then
+        pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+        return
+    end
+    task.spawn(function()
+        notify("Rejoin", "Rejoining this server...")
+        for attempt = 1, 3 do
+            local myJob = game.JobId
+            pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, myJob, LocalPlayer) end)
+            local t = 0
+            while t < 10 do
+                task.wait(1) t += 1
+                if game.JobId ~= myJob then return end
+            end
+            if attempt < 3 then notify("Rejoin", "Retrying... (" .. attempt .. "/3)") end
+        end
+        notify("Rejoin", "Same-server blocked, hopping public...")
+        task.wait(1)
+        pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+    end)
+end
+local function doHop(lowPop)
+    task.spawn(function()
+        notify("Server Hop", "Searching servers...")
+        local cands, cursor, pages = {}, nil, 0
+        while pages < 3 do
+            local url = "https://games.roblox.com/v1/games/" .. tostring(game.GameId) .. "/servers/Public?sortOrder=Asc&limit=100"
+            if cursor then url = url .. "&cursor=" .. cursor end
+            local ok, res = pcall(function() return game:HttpGet(url) end)
+            if not ok then break end
+            local ok2, data = pcall(function() return HTS:JSONDecode(res) end)
+            if not (ok2 and data and data.data) then break end
+            for _, s in ipairs(data.data) do
+                if s.id ~= game.JobId and (tonumber(s.playing) or 0) < (tonumber(s.maxPlayers) or 99) then
+                    table.insert(cands, s)
+                end
+            end
+            cursor = data.nextPageCursor
+            pages += 1
+            if not cursor then break end
+        end
+        if #cands == 0 then
+            local tries = 0
+            local note = readHopNote()
+            if note and note.job == game.JobId then tries = tonumber(note.tries) or 0 end
+            if tries >= 3 then
+                writeHopNote(game.JobId, 0)
+                notify("Server Hop", "Same server 3 times, staying.")
+                return
+            end
+            writeHopNote(game.JobId, tries + 1)
+            notify("Server Hop", "List empty, hopping random...")
+            pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+            return
+        end
+        if lowPop then table.sort(cands, function(a, b) return (a.playing or 0) < (b.playing or 0) end) end
+        local pick = lowPop and cands[1] or cands[math.random(1, #cands)]
+        notify("Server Hop", "Teleporting (" .. tostring(pick.playing) .. " players)...")
+        pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, pick.id, LocalPlayer) end)
+    end)
+end
+local autoexecArmed = false
+local function armReexec()
+    if autoexecArmed then return end
+    if not F.reexec then return end
+    if AUTOEXEC_CODE:find("PASTE_YOUR") then
+        notify("AutoExec", "Paste your loadstring into AUTOEXEC_CODE first.")
+        return
+    end
+    autoexecArmed = true
+    local q = queue_on_teleport or queueonteleport
+    if typeof(q) == "function" then
+        pcall(q, AUTOEXEC_CODE)
+    else
+        notify("AutoExec", "queue_on_teleport not supported.")
+    end
+end
+local rollHideConns = {}
+local function rollHideBackup(on)
+    for _, c in ipairs(rollHideConns) do pcall(function() c:Disconnect() end) end
+    table.clear(rollHideConns)
+    if not on then return end
+    pcall(function()
+        local R = G.UIRefs.Root.Rolling
+        for _, inst in ipairs({ R.Frame, R.DarkBackground }) do
+            if inst.Visible then inst.Visible = false end
+            table.insert(rollHideConns, inst:GetPropertyChangedSignal("Visible"):Connect(function()
+                if F.hideRolls and inst.Visible then inst.Visible = false end
+            end))
+        end
+    end)
+end
+local function pressHiddenRoll()
+    local ok, btn = pcall(function() return G.UIRefs.Root.Rolling.Options.HiddenRoll end)
+    if not ok or not btn or typeof(getconnections) ~= "function" then return false end
+    local okC, conns = pcall(getconnections, btn.Activated)
+    if not okC or type(conns) ~= "table" then return false end
+    for _, c in ipairs(conns) do pcall(function() c.Function() end) end
+    task.wait(0.7)
+    return true
+end
+local function isRollHidden()
+    local a, b = nil, nil
+    pcall(function() a = G.UIRefs.Root.Rolling.Frame.Position end)
+    task.wait(0.25)
+    pcall(function() b = G.UIRefs.Root.Rolling.Frame.Position end)
+    if not a or not b then return nil end
+    if math.abs(a.Y.Scale - b.Y.Scale) > 0.05 or math.abs(a.Y.Offset - b.Y.Offset) > 20 then return nil end
+    return b.Y.Offset > 50
+end
+local function syncRollHidden()
+    for _ = 1, 2 do
+        local cur = isRollHidden()
+        if cur == nil then return end
+        if cur == F.hideRolls then return end
+        if not pressHiddenRoll() then return end
+    end
+end
+local function setTowerHiddenUI()
+    pcall(function()
+        local S = G.UIRefs.Root.Tower.Screen
+        S.Visible = false
+        local bg = S.Parent:FindFirstChild("Background")
+        if bg then bg.Visible = false end
+    end)
+end
+
+-- ---- Grade & Trait helpers (used by Reroll tab) ----
+local gradeByLabel, traitByLabel, gradeUnitByLabel, traitUnitByLabel = {}, {}, {}, {}
+local function buildGradeOptions()
+    local t = {}
+    if G.GradesMod then
+        for name, g in pairs(G.GradesMod) do
+            if type(g) == "table" and g.order then
+                table.insert(t, { name = name, order = g.order, mult = g.incomeMultiplier })
+            end
+        end
+    end
+    if #t == 0 then return { "(unavailable)" } end
+    table.sort(t, function(a, b) return a.order < b.order end)
+    local out = {}
+    for _, g in ipairs(t) do
+        local lbl = g.name .. " (x" .. tostring(g.mult) .. ")"
+        gradeByLabel[lbl] = g.name
+        table.insert(out, lbl)
+    end
+    return out
+end
+local function traitBuffText(t)
+    local im, dm, hm = t.incomeMultiplier, t.damageMultiplier, t.healthMultiplier
+    if im and im == dm and im == hm then return "x" .. tostring(im) .. " all" end
+    local p = {}
+    if im then table.insert(p, "x" .. tostring(im) .. " income") end
+    if dm then table.insert(p, "x" .. tostring(dm) .. " dmg") end
+    if hm then table.insert(p, "x" .. tostring(hm) .. " hp") end
+    return table.concat(p, "+")
+end
+local function buildTraitOptions()
+    local t = {}
+    if G.TraitsMod then
+        for name, tr in pairs(G.TraitsMod) do
+            if type(tr) == "table" and tr.order then
+                table.insert(t, { name = name, order = tr.order, ref = tr })
+            end
+        end
+    end
+    if #t == 0 then return { "(unavailable)" } end
+    table.sort(t, function(a, b) return a.order < b.order end)
+    local out = {}
+    for _, tr in ipairs(t) do
+        local lbl = tr.name .. " (" .. traitBuffText(tr.ref) .. ")"
+        traitByLabel[lbl] = tr.name
+        table.insert(out, lbl)
+    end
+    return out
+end
+local function ownedUnitNames()
+    local counts = {}
+    for _, e in pairs(inventory()) do
+        if isUnitEntry(e) then counts[e.name] = (counts[e.name] or 0) + 1 end
+    end
+    return counts
+end
+local function buildUnitOptions(counts, map)
+    local labels = {}
+    for k in pairs(map) do map[k] = nil end
+    for name, c in pairs(counts) do
+        local lbl = name .. " (" .. c .. ")"
+        map[lbl] = name
+        table.insert(labels, lbl)
+    end
+    table.sort(labels)
+    return labels
+end
+local function refreshUnitDrop(drop, map, keepNames)
+    if not drop then return end
+    local keep = {}
+    for _, n in ipairs(keepNames) do keep[n] = true end
+    drop:Refresh(buildUnitOptions(ownedUnitNames(), map))
+    local resel = {}
+    for lbl, n in pairs(map) do if keep[n] then table.insert(resel, lbl) end end
+    if #resel > 0 then drop:Set(resel) end
+end
+local function currencyAmount(name)
+    local total = 0
+    for _, e in pairs(inventory()) do
+        if type(e) == "table" and e.name == name then total += tonumber(e.amount) or 0 end
+    end
+    return total
+end
+
+-- ---- Webhook helpers ----
+local thumbCache = {}
+local function thumbOf(asset)
+    local id = tostring(asset or ""):match("%d+")
+    if not id then return nil end
+    if thumbCache[id] ~= nil then return thumbCache[id] or nil end
+    local url = "https://thumbnails.roblox.com/v1/assets?assetIds=" .. id .. "&size=150x150&format=Png"
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        local ok2, data = pcall(function() return HTS:JSONDecode(res) end)
+        local img = ok2 and data and data.data and data.data[1] and data.data[1].imageUrl
+        if type(img) == "string" and img ~= "" then thumbCache[id] = img return img end
+    end
+    thumbCache[id] = false
+    return nil
+end
+local function hookColorInt(cfg)
+    local hex = nil
+    pcall(function()
+        local g = cfg and cfg.gradient
+        if g and g.Keypoints and g.Keypoints[1] then hex = g.Keypoints[1].Value:ToHex() end
+    end)
+    return tonumber(hex, 16) or 0x808080
+end
+local function postWebhook(url, payload)
+    if type(url) ~= "string" or not url:find("^https?://") then return false end
+    local okB, body = pcall(function() return HTS:JSONEncode(payload) end)
+    if not okB then return false end
+    if typeof(request) == "function" then
+        local ok = pcall(function()
+            request({ Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
+        end)
+        return ok
+    elseif typeof(http_request) == "function" then
+        local ok = pcall(function()
+            http_request({ Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
+        end)
+        return ok
+    end
+    return false
+end
+local function hookStamp()
+    return os.date("!%Y-%m-%dT%H:%M:%S.000Z")
+end
+local function sendRollHook(url, e, cfg, chance)
+    local at = e.attributes or {}
+    local mut = at.mutation
+    local thumb = nil
+    if mut and G.Mutations and G.Mutations[mut] then thumb = thumbOf(G.Mutations[mut].image) end
+    if not thumb then
+        local cur, all = nil, nil
+        pcall(function() cur = G.DC.Dice() end)
+        pcall(function() all = G.DiceMod.GetAll() end)
+        if cur and all and all[cur] then thumb = thumbOf(all[cur].image) end
+    end
+    local fields = {
+        { name = "Chance", value = "1 in " .. fmt(chance), inline = true },
+        { name = "Mutation", value = tostring(mut or "None"), inline = true },
+    }
+    if at.grade then table.insert(fields, { name = "Grade", value = tostring(at.grade), inline = true }) end
+    if at.trait then table.insert(fields, { name = "Trait", value = tostring(at.trait), inline = true }) end
+    local emb = {
+        title = e.name .. " rolled!",
+        fields = fields,
+        color = hookColorInt(cfg),
+        footer = { text = LocalPlayer.DisplayName },
+        timestamp = hookStamp(),
+    }
+    if thumb then emb.thumbnail = { url = thumb } end
+    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+end
+local function anyRollHook()
+    return F.rollHookOn and true or false
+end
+local function onNewEntry(key)
+    if not anyRollHook() then return end
+    local e = invEntry(key)
+    if not e or not isUnitEntry(e) then return end
+    local ok, cfg = pcall(function() return G.EntryRegistry.getEntryConfig(e.name) end)
+    if not ok or not cfg then return end
+    local chance = 0
+    pcall(function() chance = cfg.chance(e.attributes) or 0 end)
+    if F.rollHookOn then
+        local url = F.rollHookUrl
+        local min = tonumber(F.rollHookMin) or 0
+        if type(url) == "string" and url ~= "" and min > 0 and chance >= min then
+            task.spawn(function() sendRollHook(url, e, cfg, chance) end)
+        end
+    end
+end
+local function watchRolls()
+    pcall(function()
+        rollWatchConn = G.DC.Inventory.OnKeyAdded(function(key)
+            task.spawn(function() onNewEntry(key) end)
+        end)
+    end)
+end
+local function sendStatsHook(url)
+    local wins = 0
+    for _, w in pairs(Stats.towerWins) do wins += tonumber(w) or 0 end
+    local pots = 0
+    local potNames = {}
+    pcall(function()
+        for name in pairs(activePotions()) do
+            pots += 1
+            table.insert(potNames, name)
+        end
+    end)
+    table.sort(potNames)
+    local potVal = tostring(pots)
+    if #potNames > 0 then
+        local s = table.concat(potNames, ", ")
+        if #s > 180 then s = s:sub(1, 180) .. "..." end
+        potVal = potVal .. "\n" .. s
+    end
+    local emb = {
+        title = "Session Stats",
+        fields = {
+            { name = "Money", value = fmt(money()), inline = true },
+            { name = "Rolls", value = tostring(rolls()), inline = true },
+            { name = "Rebirth", value = tostring(rebirth()), inline = true },
+            { name = "Units Sold", value = tostring(Stats.sold or 0), inline = true },
+            { name = "Tower Wins", value = tostring(wins), inline = true },
+            { name = "Active Potions", value = potVal, inline = false },
+        },
+        color = 0x4ADE80,
+        footer = { text = LocalPlayer.DisplayName },
+        timestamp = hookStamp(),
+    }
+    local th = thumbOf("rbxassetid://93129522258096")
+    if th then emb.thumbnail = { url = th } end
+    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+end
+local lastStatsHook = 0
+local function statsHookTick()
+    if os.clock() - lastStatsHook < (tonumber(F.statHookInterval) or 300) then return end
+    lastStatsHook = os.clock()
+    if F.statHookOn then
+        local url = F.statHookUrl
+        if type(url) == "string" and url ~= "" then
+            task.spawn(function() sendStatsHook(url) end)
+        end
+    end
+end
+
+-- ============ TABS ============
+window:CreateSection({ name = "Farm" })
+local tMain = window:CreateTab({ name = "Main", icon = "rbxassetid://77304764857415" })
+local tUnits = window:CreateTab({ name = "Units", icon = "rbxassetid://133003586374441" })
+local tUpg = window:CreateTab({ name = "Upgrades", icon = "rbxassetid://73069486155895" })
+local tDice = window:CreateTab({ name = "Dice", icon = "rbxassetid://134876970337785" })
+local tSell = window:CreateTab({ name = "Sell", icon = "rbxassetid://118330449034393" })
+local tTower = window:CreateTab({ name = "Tower", icon = "rbxassetid://95008289608947" })
+local tPotion = window:CreateTab({ name = "Potion", icon = "rbxassetid://92709571106091" })
+local tReroll = window:CreateTab({ name = "Reroll", icon = "rbxassetid://138588191124173" })
+-- local tTrade = window:CreateTab({ name = "Trade", icon = "rbxassetid://72821498911763" }) -- TRADE TAB DISABLED
+window:CreateSection({ name = "Info" })
+local tStats = window:CreateTab({ name = "Stats", icon = "rbxassetid://93129522258096" })
+local tChanges = window:CreateTab({ name = "Changelogs", icon = "rbxassetid://112634880544308" })
+window:CreateSection({ name = "System" })
+local tSettings = window:CreateTab({ name = "Settings", icon = "rbxassetid://103326255092488" })
+local tHooks = window:CreateTab({ name = "Webhook", icon = "rbxassetid://137296756955034" })
+
+tMain:CreateDivider({ text = "Money Collection" })
+local collectLine = tMain:CreateConsole({ name = "Collected Total", height = 48, text = "Total collected: 0" })
+U.collect = tMain:CreateToggle({ name = "Auto Collect Money", value = false,
+    callback = function(v) F.collect = v end })
+U.collectDelay = tMain:CreateSlider({ name = "Collect Delay", range = { 0.1, 15 }, increment = 0.1, value = 2, suffix = "s",
+    callback = function(v) F.collectDelay = v end })
+
+tMain:CreateDivider({ text = "Rebirth" })
+U.rebirth = tMain:CreateToggle({ name = "Auto Rebirth", value = false,
+    callback = function(v) F.rebirth = v end })
+U.rebirthDelay = tMain:CreateSlider({ name = "Rebirth Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
+    callback = function(v) F.rebirthDelay = v end })
+tMain:CreateButton({ name = "Rebirth Now", callback = function()
+    local s = getSig("RebirthService", "Rebirth")
+    if s then local ok, err = pcall(function() s:Fire() end)
+        notify("Rebirth", ok and "Request sent." or ("Error: " .. tostring(err))) end
+end })
+
+tMain:CreateDivider({ text = "Roll" })
+U.autoRoll = tMain:CreateToggle({ name = "Auto Roll", value = false,
+    callback = function(v)
+        F.autoRoll = v
+        local s = getSig("RollService", "SetAutoRoll")
+        if s then pcall(function() s:Fire(v) end) end
+    end })
+U.hideRolls = tMain:CreateToggle({ name = "Auto Hide Rolls", value = false,
+    callback = function(v) F.hideRolls = v syncRollHidden() rollHideBackup(v) end })
+U.claimQuests = tMain:CreateToggle({ name = "Auto Claim Quests", value = false,
+    callback = function(v) F.claimQuests = v end })
+tMain:CreateButton({ name = "Claim Quests Now", callback = function() task.spawn(doClaimQuests) end })
+
+-- ---- Units ----
+tUnits:CreateDivider({ text = "Levels (Level Up)" })
+U.levelup = tUnits:CreateToggle({ name = "Auto Level Up", value = false,
+    callback = function(v) F.levelup = v end })
+U.maxLevel = tUnits:CreateSlider({ name = "Max Unit Level", range = { 1, 99 }, increment = 1, value = 40,
+    callback = function(v) F.maxLevel = math.floor(v) end })
+U.levelDelay = tUnits:CreateSlider({ name = "Level Delay", range = { 0.1, 15 }, increment = 0.1, value = 2.5, suffix = "s",
+    callback = function(v) F.levelDelay = v end })
+
+tUnits:CreateDivider({ text = "Place Best Units" })
+U.placeBest = tUnits:CreateToggle({ name = "Auto Place Best", value = false,
+    callback = function(v) F.placeBest = v end })
+U.replaceWorst = tUnits:CreateToggle({ name = "Replace Worst When Full", value = true,
+    callback = function(v) F.replaceWorst = v end })
+U.placeDelay = tUnits:CreateSlider({ name = "Place Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
+    callback = function(v) F.placeDelay = v end })
+tUnits:CreateButton({ name = "Game's EquipBest (one-shot)", callback = function()
+    local s = getSig("PlotService", "EquipBest")
+    if s then pcall(function() s:Fire() end) end
+end })
+
+-- ---- Upgrades (skill tree) ----
+tUpg:CreateDivider({ text = "Skill Tree" })
+U.upgrades = tUpg:CreateToggle({ name = "Auto Upgrades", value = false,
+    callback = function(v) F.upgrades = v end })
+U.upgradeDelay = tUpg:CreateSlider({ name = "Upgrade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
+    callback = function(v) F.upgradeDelay = v end })
+U.upgCats = tUpg:CreateDropdown({ name = "Category Filter", multiSelect = true,
+    options = { "Money", "Luck", "Fortune", "Damage", "Roll Speed", "Sell", "Unit Storage", "Health", "Walkspeed", "Income" },
+    value = {}, callback = function(sel) F.upgradeCats = (type(sel) == "table") and sel or {} end })
+
+-- ---- Dice ----
+tDice:CreateDivider({ text = "Dice Shop" })
+U.buyDice = tDice:CreateToggle({ name = "Auto Buy Best Dice", value = false,
+    callback = function(v) F.buyDice = v end })
+U.equipDice = tDice:CreateToggle({ name = "Auto Equip Best Dice", value = true,
+    callback = function(v) F.equipDice = v end })
+U.diceDelay = tDice:CreateSlider({ name = "Dice Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
+    callback = function(v) F.diceDelay = v end })
+
+-- ---- Sell ----
+tSell:CreateDivider({ text = "Auto Sell Threshold" })
+U.sellInput = tSell:CreateInput({ name = "Rarity Threshold (e.g. 1t)", value = "",
+    placeholder = "e.g. 1t, 500b, 10q",
+    callback = function(text) applySellInput(text) end })
+tSell:CreateButton({ name = "Set Threshold", callback = function()
+    applySellInput(U.sellInput and U.sellInput.value or "")
+end })
+U.sellSync = tSell:CreateToggle({ name = "Apply Threshold To Game", value = false,
+    callback = function(v)
+        F.sellSync = v
+        local s = getSig("SellService", "UpdateAutoSell")
+        if v and F.sellThreshold > 0 then if s then pcall(function() s:Fire(F.sellThreshold) end) end
+        elseif v then notify("Auto Sell", "Write a threshold first.")
+        else if s then pcall(function() s:Fire(0) end) end notify("Auto Sell", "Game auto-sell off.") end
+    end })
+tSell:CreateDivider({ text = "Instant Bulk Sell" })
+U.sellAuto = tSell:CreateToggle({ name = "Auto Instant Sell", value = false,
+    callback = function(v) F.sellAuto = v end })
+U.sellDelay = tSell:CreateSlider({ name = "Sell Check", range = { 0.1, 60 }, increment = 0.1, value = 10, suffix = "s",
+    callback = function(v) F.sellDelay = v end })
+U.keepBest = tSell:CreateSlider({ name = "Keep Top N", range = { 0, 25 }, increment = 1, value = 0,
+    callback = function(v) F.keepBest = math.floor(v) end })
+tSell:CreateButton({ name = "Sell Now (below threshold)", callback = function() task.spawn(function() doInstantSell() end) end })
+
+-- ---- Tower ----
+tTower:CreateDivider({ text = "Tower Selection" })
+local towerNames = { "Dragon Tower", "Cursed Tower", "Pirate Tower", "Hidden Leaf Tower", "Infinity Tower" }
+local towerByLabel = {}
+local function towerLabel(name)
+    local diff = nil
+    pcall(function()
+        local t = G.TowersMod.Get(name)
+        if t and t.difficulty and t.difficulty.name then diff = t.difficulty.name end
+    end)
+    return diff and (name .. " [" .. diff .. "]") or name
+end
+pcall(function()
+    local all = G.TowersMod.GetAll()
+    local tmp = {}
+    for k in pairs(all) do table.insert(tmp, k) end
+    table.sort(tmp, function(a, b)
+        local oa, ob = 99, 99
+        pcall(function() oa = G.TowersMod.Get(a).order or 99 end)
+        pcall(function() ob = G.TowersMod.Get(b).order or 99 end)
+        if oa == ob then return a < b end
+        return oa < ob
+    end)
+    if #tmp > 0 then towerNames = tmp end
+end)
+local towerLabels = {}
+for _, n in ipairs(towerNames) do
+    local lbl = towerLabel(n)
+    towerByLabel[lbl] = n
+    table.insert(towerLabels, lbl)
+end
+U.towerSel = tTower:CreateDropdown({ name = "Tower", options = towerLabels, value = towerLabels[1],
+    callback = function(sel)
+        local lbl = (type(sel) == "table") and (sel[1] or towerLabels[1]) or sel
+        F.towerName = towerByLabel[lbl] or lbl
+    end })
+U.tower = tTower:CreateToggle({ name = "Auto Towers", value = false,
+    callback = function(v)
+        F.tower = v
+        if not v then local c = getFn("Towers", "CancelTower") if c then pcall(c) end end
+    end })
+U.towerEquipBest = tTower:CreateToggle({ name = "Equip Best Tower Team", value = true,
+    callback = function(v) F.towerEquipBest = v end })
+U.towerDelay = tTower:CreateSlider({ name = "Floor Wait", range = { 0.1, 5 }, increment = 0.1, value = 2, suffix = "s",
+    callback = function(v) F.towerDelay = v end })
+tTower:CreateButton({ name = "Stop Tower", callback = function()
+    F.tower = false
+    local c = getFn("Towers", "CancelTower") if c then pcall(c) end
+end })
+local towerStat = tTower:CreateStat({ name = "Tower Wins", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
+local floorStat = tTower:CreateStat({ name = "Tower Steps", value = 0, icon = "rbxassetid://112002461760953", changeMode = "absolute" })
+local floorNowStat = tTower:CreateStat({ name = "Tower Floor", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
+
+-- ---- Potion ----
+tPotion:CreateDivider({ text = "Auto Potion" })
+U.potionAuto = tPotion:CreateToggle({ name = "Auto Potion", value = false,
+    callback = function(v) F.potionAuto = v end })
+local potDrop, potByLabel = nil, {}
+local function potBuffText(e)
+    local parts = {}
+    for bn, b in pairs(e.buffs or {}) do
+        table.insert(parts, "x" .. tostring(b.amount) .. " " .. (bn:gsub(" Multiplier", "")))
+    end
+    table.sort(parts)
+    return table.concat(parts, "+")
+end
+local function potDurText(d)
+    d = tonumber(d) or 0
+    if d % 60 == 0 then return (d / 60) .. "m" end
+    return tostring(math.floor(d / 6) / 10) .. "m"
+end
+local function buildPotOptions(withCount)
+    local labels = {}
+    potByLabel = {}
+    if not G.BoostConfig or not G.BoostConfig.entries then return { "(potion list failed to load)" } end
+    local counts = {}
+    if withCount then
+        for _, e in pairs(inventory()) do
+            if type(e) == "table" and e.name then counts[e.name] = tonumber(e.amount) or 0 end
+        end
+    end
+    for name, e in pairs(G.BoostConfig.entries) do
+        local lbl = name .. " [T" .. tostring(e.tier) .. " | " .. potBuffText(e) .. " | " .. potDurText(e.duration) .. "]"
+        if withCount then lbl = lbl .. " (" .. (counts[name] or 0) .. " owned)" end
+        potByLabel[lbl] = name
+        table.insert(labels, lbl)
+    end
+    table.sort(labels)
+    return labels
+end
+potDrop = tPotion:CreateDropdown({ name = "Potions", multiSelect = true,
+    options = buildPotOptions(false), value = {},
+    callback = function(sel)
+        F.potions = {}
+        if type(sel) == "table" then
+            for _, lbl in ipairs(sel) do
+                local n = potByLabel[lbl]
+                if n then table.insert(F.potions, n) end
+            end
+        end
+    end })
+U.potions = potDrop
+U.potionBest = tPotion:CreateToggle({ name = "Best Per Category", description = "Uses the highest owned tier per category. Lower tiers would be wasted, since only the highest tier per category applies in-game.", value = true,
+    callback = function(v) F.potionBest = v end })
+U.potionExtend = tPotion:CreateToggle({ name = "Extend While Active", description = "If on, re-uses the same potion before it expires and extends its duration. If off, waits for expiry.", value = false,
+    callback = function(v) F.potionExtend = v end })
+U.potionDelay = tPotion:CreateSlider({ name = "Potion Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
+    callback = function(v) F.potionDelay = v end })
+tPotion:CreateButton({ name = "Use Now (selected)", callback = function() task.spawn(function() doPotionTick() end) end })
+tPotion:CreateButton({ name = "Show Active", callback = function() showPotions() end })
+tPotion:CreateButton({ name = "Refresh List (show counts)", callback = function()
+    if not potDrop then return end
+    local keep = {}
+    for _, n in ipairs(F.potions) do keep[n] = true end
+    potDrop:Refresh(buildPotOptions(true))
+    local resel = {}
+    for lbl, n in pairs(potByLabel) do if keep[n] then table.insert(resel, lbl) end end
+    if #resel > 0 then potDrop:Set(resel) end
+end })
+
+-- ---- Reroll (Grades & Traits) ----
+tReroll:CreateDivider({ text = "Auto Grade" })
+U.gradeAuto = tReroll:CreateToggle({ name = "Auto Grade", description = "Rolls grades until a target grade hits. Protected grades (S+) are never rolled away.", value = false,
+    callback = function(v) F.gradeAuto = v end })
+U.gradeTargets = tReroll:CreateDropdown({ name = "Target Grades", multiSelect = true,
+    options = buildGradeOptions(), value = {},
+    callback = function(sel)
+        F.gradeTargets = {}
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeByLabel[lbl] if n then table.insert(F.gradeTargets, n) end end end
+    end })
+U.gradeUnits = tReroll:CreateDropdown({ name = "Grade Units", multiSelect = true,
+    options = buildUnitOptions(ownedUnitNames(), gradeUnitByLabel), value = {},
+    callback = function(sel)
+        F.gradeUnits = {}
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeUnitByLabel[lbl] if n then table.insert(F.gradeUnits, n) end end end
+    end })
+tReroll:CreateButton({ name = "Refresh Grade Units", callback = function()
+    refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits)
+end })
+U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", description = "On: rolls every unit. Off: only selected Grade Units.", value = false,
+    callback = function(v) F.gradeAll = v end })
+U.gradeDelay = tReroll:CreateSlider({ name = "Grade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
+    callback = function(v) F.gradeDelay = v end })
+U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", description = "Each grade roll costs 1 gem. Stops when gems reach this.", value = "", numeric = true, placeholder = "e.g. 100",
+    callback = function(t) F.gemReserve = math.floor(tonumber(t) or 0) end })
+tReroll:CreateButton({ name = "Roll Grade Now", callback = function() task.spawn(function() doGradeTick(true) end) end })
+tReroll:CreateDivider({ text = "Auto Trait" })
+U.traitAuto = tReroll:CreateToggle({ name = "Auto Trait", description = "Rolls traits until a target trait hits. Protected traits (Samurai+) are never rolled away.", value = false,
+    callback = function(v) F.traitAuto = v end })
+U.traitTargets = tReroll:CreateDropdown({ name = "Target Traits", multiSelect = true,
+    options = buildTraitOptions(), value = {},
+    callback = function(sel)
+        F.traitTargets = {}
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitByLabel[lbl] if n then table.insert(F.traitTargets, n) end end end
+    end })
+U.traitUnits = tReroll:CreateDropdown({ name = "Trait Units", multiSelect = true,
+    options = buildUnitOptions(ownedUnitNames(), traitUnitByLabel), value = {},
+    callback = function(sel)
+        F.traitUnits = {}
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitUnitByLabel[lbl] if n then table.insert(F.traitUnits, n) end end end
+    end })
+tReroll:CreateButton({ name = "Refresh Trait Units", callback = function()
+    refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits)
+end })
+U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", description = "On: rolls every unit. Off: only selected Trait Units.", value = false,
+    callback = function(v) F.traitAll = v end })
+U.traitDelay = tReroll:CreateSlider({ name = "Trait Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
+    callback = function(v) F.traitDelay = v end })
+U.rerollReserve = tReroll:CreateInput({ name = "Reroll Reserve", description = "Each trait roll costs 1 reroll. Stops when rerolls reach this.", value = "", numeric = true, placeholder = "e.g. 50",
+    callback = function(t) F.rerollReserve = math.floor(tonumber(t) or 0) end })
+
+-- ---- Trade ----
+--[[TRADE-UI-DISABLED (remove this line and the closing line to re-enable)
+tTrade:CreateDivider({ text = "Auto Trade" })
+U.tradeAuto = tTrade:CreateToggle({ name = "Auto Trade", value = false,
+    callback = function(v) F.tradeAuto = v end })
+U.tradeInput = tTrade:CreateInput({ name = "Min Money (e.g. 1b)", value = "", placeholder = "e.g. 1b, 500m, 10qd",
+    callback = function(text) applyTradeInput(text) end })
+tTrade:CreateButton({ name = "Set Min Money", callback = function()
+    applyTradeInput(U.tradeInput and U.tradeInput.value or "")
+end })
+U.tradeRetries = tTrade:CreateSlider({ name = "Retries Per Player", range = { 1, 10 }, increment = 1, value = 3,
+    callback = function(v) F.tradeRetries = math.floor(v) end })
+U.tradeHop = tTrade:CreateToggle({ name = "Hop When Empty", value = true,
+    callback = function(v) F.tradeHop = v end })
+U.tradeAutoGo = tTrade:CreateToggle({ name = "Auto Ready + Accept", value = true,
+    callback = function(v) F.tradeAutoGo = v end })
+U.tradeNeedOffer = tTrade:CreateToggle({ name = "Require Partner Offer", value = true,
+    callback = function(v) F.tradeNeedOffer = v end })
+U.tradeMinItems = tTrade:CreateSlider({ name = "Min Partner Items", range = { 0, 10 }, increment = 1, value = 1,
+    callback = function(v) F.tradeMinItems = math.floor(v) end })
+tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
+    F.tradeAuto = false
+    if U.tradeAuto then pcall(function() U.tradeAuto:Set(false, true) end) end
+    local c = getSig("TradeService", "CancelTrade")
+    if c then pcall(function() c:Fire() end) end
+end })
+local tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+local tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+--TRADE-UI-DISABLED]]
+
+-- ---- Stats ----
+local moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
+local rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rbxassetid://134876970337785", changeBaseline = "initial" })
+local soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
+local potionStat = tStats:CreateStat({ name = "Active Potions", value = 0, icon = "rbxassetid://92709571106091", changeMode = "absolute" })
+local console = tStats:CreateConsole({ name = "Log", height = 160, follow = true, maxLines = 120 })
+local function clog(m) pcall(function() console:Append(m) end) end
+
+tChanges:CreateText({
+    name = '<b><font color="#4ade80">v1.0 - Release</font></b>',
+    icon = "rbxassetid://138588191124173",
+    text = [[<font color="#4ade80">•</font> Auto Collect Money with live total counter
 <font color="#4ade80">•</font> Auto Level Up with max level limit
 <font color="#4ade80">•</font> Auto Place Best, replaces weakest unit when full
 <font color="#4ade80">•</font> Auto Rebirth
@@ -15,4 +1087,1066 @@ local Players=game:GetService("Players")local RS=game:GetService("ReplicatedStor
 <font color="#4ade80">•</font> Settings save per player and restore on next run
 <font color="#4ade80">•</font> Server tools: Rejoin, Server Hop, Low-Player Hop
 <font color="#4ade80">•</font> Character: WalkSpeed, Fly, Noclip, Anti-AFK, FPS Boost
-<font color="#4ade80">•</font> Auto Execute on teleport with your own loadstring]]})tStats:CreateDivider({text="General"})tStats:CreateButton({name="Reset Growth Stats",callback=function()pcall(function()moneyStat:ResetBaseline()end)pcall(function()rollStat:ResetBaseline()end)end})tStats:CreateKeybind({name="Menu Key",value=Enum.KeyCode.RightShift,callback=function()pcall(function()window:ToggleHide()end)end})tStats:CreateButton({name="Close Menu (Unload)",callback=function()Alive=false F.tower=false pcall(function()local c=getFn("Towers","CancelTower")if c then c()end end)pcall(function()window:Unload()end)end})tSettings:CreateDivider({text="Settings Saving"})U.saveSettings=tSettings:CreateToggle({name="Auto Save Settings",value=true,callback=function(v)F.saveSettings=v if v then pcall(saveNow)end end})tSettings:CreateDivider({text="Server"})tSettings:CreateButton({name="Rejoin Server",callback=function()doRejoin(true)end})tSettings:CreateButton({name="Server Hop",callback=function()doHop(false)end})tSettings:CreateButton({name="Hop: Low Player Server",callback=function()doHop(true)end})tSettings:CreateDivider({text="Auto Execute"})U.reexec=tSettings:CreateToggle({name="Auto Execute On Teleport",value=true,callback=function(v)F.reexec=v end})tSettings:CreateDivider({text="Character"})U.wsOn=tSettings:CreateToggle({name="WalkSpeed",value=false,callback=function(v)F.wsOn=v applyWS()end})U.wsValue=tSettings:CreateSlider({name="WalkSpeed Value",range={16,250},increment=1,value=16,callback=function(v)F.wsValue=math.floor(v)applyWS()end})U.flyOn=tSettings:CreateToggle({name="Fly (WASD + Space/Shift)",value=false,callback=function(v)setFly(v)end})U.flySpeed=tSettings:CreateSlider({name="Fly Speed",range={10,200},increment=5,value=50,callback=function(v)F.flySpeed=v end})U.noclip=tSettings:CreateToggle({name="Noclip",value=false,callback=function(v)F.noclip=v end})U.afk=tSettings:CreateToggle({name="Anti-AFK",value=true,callback=function(v)F.afk=v end})tSettings:CreateDivider({text="Performance"})tSettings:CreateButton({name="FPS Boost",callback=function()fpsBoost()end})tHooks:CreateDivider({text="Roll Alerts"})U.rollHookUrl=tHooks:CreateInput({name="Roll Webhook URL",value="",placeholder="https://discord.com/api/webhooks/...",callback=function(t)F.rollHookUrl=t end})U.rollHookOn=tHooks:CreateToggle({name="Roll Alerts",value=false,callback=function(v)F.rollHookOn=v end})U.rollMinT=tHooks:CreateInput({name="Roll Min Chance",value="",placeholder="e.g. 1b - only above this is sent",callback=function(t)F.rollHookMin=parseCompact(t)or 0 end})tHooks:CreateDivider({text="Stat Reports"})U.statHookUrl=tHooks:CreateInput({name="Stat Webhook URL",value="",placeholder="https://discord.com/api/webhooks/...",callback=function(t)F.statHookUrl=t end})U.statHookOn=tHooks:CreateToggle({name="Stat Reports",value=false,callback=function(v)F.statHookOn=v end})U.statHookInterval=tHooks:CreateSlider({name="Stat Report Interval",range={60,1800},increment=60,value=300,suffix="s",callback=function(v)F.statHookInterval=math.floor(v)end})tHooks:CreateButton({name="Send Test Stats",callback=function()task.spawn(function()if type(F.statHookUrl)=="string"and F.statHookUrl~=""then notify("Webhook",sendStatsHook(F.statHookUrl)and"Test sent."or"Send failed.")else notify("Webhook","Set a stat webhook URL first.")end end)end})if not G.ok or#G.missing>0 then notify("Warning","Some modules failed to load: "..table.concat(G.missing,", "))clog("MISSING: "..table.concat(G.missing,", "))else clog("Ready. Money: "..fmt(money()))end local function doCollect()local sig=getSig("PlotService","CollectBalance")if not sig then return end local list,s=unlockedSlots()for _,slot in ipairs(list)do if not F.collect or not Alive then break end local d=s[tostring(slot)]local amt=d and(tonumber(d.balance)or 0)or 0 if amt>0 then pcall(function()sig:Fire(slot)end)Stats.collectedMoney=Stats.collectedMoney+(amt)task.wait(0.15)end end end local function doLevelUp()local sig=getSig("PlotService","LevelUpSlot")if not sig then return end local list,s=unlockedSlots()local cands={}for _,slot in ipairs(list)do local d=s[tostring(slot)]local uid=d and d.unitId if uid then local e=invEntry(uid)if e and e.attributes then local lvl=tonumber(e.attributes.level)or 1 if lvl<F.maxLevel then local price=0 pcall(function()price=G.UnitUtil.GetLevelPrice(e.name,e.attributes)end)table.insert(cands,{slot=slot,lvl=lvl,price=price})end end end if not F.levelup or not Alive then break end end table.sort(cands,function(a,b)return a.lvl<b.lvl end)local m=money()for i=1,math.min(2,#cands)do local c=cands[i]if m>=c.price then pcall(function()sig:Fire(c.slot)end)Stats.leveled=Stats.leveled+(1)m=m-(c.price)task.wait(0.4)end end end local function doEquip(key)local ok=pcall(function()return G.UnitController.Equip(key)end)if ok then task.wait(0.4)return true end return false end local function doPlaceBest()if Busy.place then return end Busy.place=true local ok,err=pcall(function()local list,s=unlockedSlots()local placed,placedKeys={},{}for _,slot in ipairs(list)do local d=s[tostring(slot)]if d and d.unitId then local e=invEntry(d.unitId)if e then placed[slot]={key=d.unitId,chance=unitChance(e),name=e.name}placedKeys[d.unitId]=true end end end local best,bestChance=nil,0 for key,e in pairs(inventory())do if isUnitEntry(e)and not placedKeys[key]and key~=equippedKey()then if not(e.attributes and e.attributes.locked)then local ch=unitChance(e)if ch>bestChance then best,bestChance=key,ch end end end end if not best then return end for _,slot in ipairs(list)do if not s[tostring(slot)]or not s[tostring(slot)].unitId then if doEquip(best)then local sig=getSig("PlotService","InteractSlot")if sig then pcall(function()sig:Fire(slot)end)end waitVerify(function()local d=slots()[tostring(slot)]return d and d.unitId==best end,3)clog("Placed: "..tostring((invEntry(best)or{}).name).." -> slot "..slot)end return end end if not F.replaceWorst then return end local worstSlot,worst=nil,nil for slot,info in pairs(placed)do if not worst or info.chance<worst then worstSlot,worst=slot,info.chance end end if worstSlot and bestChance>worst then local sig=getSig("PlotService","InteractSlot")if not sig then return end pcall(function()sig:Fire(worstSlot)end)local emptied=waitVerify(function()local d=slots()[tostring(worstSlot)]return not(d and d.unitId)end,3)if not emptied then local eb=getSig("PlotService","EquipBest")if eb then pcall(function()eb:Fire()end)end return end task.wait(0.3)if doEquip(best)then pcall(function()sig:Fire(worstSlot)end)waitVerify(function()local d=slots()[tostring(worstSlot)]return d and d.unitId==best end,3)clog("Swapped: slot "..worstSlot.." ("..fmt(worst).." -> "..fmt(bestChance)..")")end end end)if not ok then clog("Place error: "..tostring(err))end Busy.place=false end local function catOf(name)for _,c in ipairs({"Roll Speed","Unit Storage","Money","Luck","Fortune","Damage","Sell","Health","Walkspeed","Income"})do if name:sub(1,#c)==c then return c end end return nil end local function doUpgrades()local sig=buyUpgradeSig()if not sig then return end local owned={}pcall(function()owned=G.DC.Upgrades()or{}end)local list={}for name,data in pairs(G.Upgrades)do if type(data)=="table"and data.price and not owned[name]and name~="Start"then if#F.upgradeCats==0 then table.insert(list,{name=name,price=data.price})else local c=catOf(name)for _,want in ipairs(F.upgradeCats)do if c==want then table.insert(list,{name=name,price=data.price})break end end end end end table.sort(list,function(a,b)return a.price<b.price end)local m=money()for _,u in ipairs(list)do if m>=u.price then local ok=pcall(function()sig:Fire(u.name)end)if ok then Stats.upgraded=Stats.upgraded+(1)clog("Upgrade: "..u.name)end break else break end end end local function doRebirth()local next=nil pcall(function()next=G.Rebirths.GetNext(rebirth())end)if not next then return end if money()>=(next.cost or math.huge)then local s=getSig("RebirthService","Rebirth")if s then pcall(function()s:Fire()end)Stats.rebirthed=Stats.rebirthed+(1)clog("Rebirth done!")notify("Rebirth","Rebirth done.")task.wait(8)end end end local function bestDiceOwned()local owned={}pcall(function()owned=G.DC.OwnedDice()or{}end)local cur=nil pcall(function()cur=G.DC.Dice()end)local all=G.DiceMod.GetAll()local best,bestLuck=cur,-1 for name in pairs(owned)do local d=all[name]if d and(d.luck or 0)>bestLuck then best,bestLuck=name,d.luck end end return best,cur end local function doDice()if Busy.dice then return end Busy.dice=true pcall(function()local all=G.DiceMod.GetAll()local m=money()if F.buyDice then local ordered={}for name,d in pairs(all)do if d.price then table.insert(ordered,{name=name,price=d.price,luck=d.luck or 0})end end table.sort(ordered,function(a,b)return a.luck>b.luck end)local owned={}pcall(function()owned=G.DC.OwnedDice()or{}end)for _,d in ipairs(ordered)do if not owned[d.name]and m>=d.price then local s=getSig("DiceShopService","BuyDice")if s then pcall(function()s:Fire(d.name)end)end clog("Dice bought: "..d.name)task.wait(0.6)break end end end if F.equipDice then local best,cur=bestDiceOwned()if best and best~=cur then local s=getSig("DiceShopService","EquipDice")if s then pcall(function()s:Fire(best)end)end end end end)Busy.dice=false end local function potionLeft(entry)if not entry or type(entry)~="table"then return 0 end if type(entry.startedAt)=="number"and type(entry.remaining)=="number"then local now=0 pcall(function()now=workspace:GetServerTimeNow()end)return math.max(0,entry.remaining-math.max(0,now-entry.startedAt))end if type(entry.expiresAt)=="number"then local t=0 pcall(function()t=os.time()end)return math.max(0,entry.expiresAt-t)end if type(entry.remaining)=="number"then return math.max(0,entry.remaining)end return 1e9 end local function activePotions()local out={}local ok,ae=pcall(function()return G.DC.ActiveEntries()end)if not ok or type(ae)~="table"then return out end for name,e in pairs(ae)do if type(e)=="table"then if potionLeft(e)>3 then out[name]=potionLeft(e)end elseif e then out[name]=1e9 end end return out end local function potionKeys()local out={}for key,e in pairs(inventory())do if type(e)=="table"and e.name and(tonumber(e.amount)or 0)>=1 then local ok,cfg=pcall(function()return G.EntryRegistry.getEntryConfig(e.name)end)if ok and cfg and cfg.kind=="Boost"then out[e.name]=key end end end return out end doPotionTick=function()if Busy.potion then return end if not G.BoostConfig or not G.BoostConfig.entries then return end Busy.potion=true pcall(function()if#F.potions==0 then return end local entries=G.BoostConfig.entries local have=potionKeys()local active=activePotions()local cands={}for _,name in ipairs(F.potions)do local e=entries[name]if e and have[name]then table.insert(cands,{name=name,cat=e.category,tier=e.tier or 0,key=have[name]})end end if F.potionBest then local best={}for _,c in ipairs(cands)do if not best[c.cat]or c.tier>best[c.cat].tier then best[c.cat]=c end end cands={}for _,c in pairs(best)do table.insert(cands,c)end end local activeTier={}for aname in pairs(active)do local ae=entries[aname]if ae then local t=ae.tier or 0 if not activeTier[ae.category]or t>activeTier[ae.category]then activeTier[ae.category]=t end end end local sig=getSig("BoostService","Use")if not sig then return end for _,c in ipairs(cands)do if(active[c.name]or 0)>0 and not F.potionExtend then elseif(activeTier[c.cat]or 0)>c.tier then clog("Skipped (higher tier active in category): "..c.name)else pcall(function()sig:Fire(c.key)end)Stats.potions=Stats.potions+(1)clog("Potion used: "..c.name)task.wait(0.5)end end end)Busy.potion=false end showPotions=function()local active=activePotions()local n=0 for name,left in pairs(active)do n=n+(1)clog("Active: "..name.." - "..math.floor(left/60).."m "..math.floor(left%60).."s left")end if n==0 then clog("No active potions.")end notify("Potion",n.." active potion(s).")end doInstantSell=function()if F.sellThreshold<=0 then notify("Sell","Set a threshold first (e.g. 1t).")return 0 end local fn=getFn("SellService","SellInventory")if not fn then return 0 end local ok,n=pcall(function()local s=slots()local inSlot,inTower={},{}for _,d in pairs(s)do if d.unitId then inSlot[d.unitId]=true end end pcall(function()for _,k in pairs(G.DC.TowerTeam()or{})do inTower[k]=true end end)local eq=equippedKey()local cands={}for key,e in pairs(inventory())do if isUnitEntry(e)and key~=eq and not inSlot[key]and not inTower[key]then if not(e.attributes and e.attributes.locked)then local ch=unitChance(e)if ch>0 and ch<F.sellThreshold then table.insert(cands,{key=key,chance=ch})end end end end table.sort(cands,function(a,b)return a.chance<b.chance end)local keys={}for i,c in ipairs(cands)do if i>#cands-F.keepBest then break end table.insert(keys,c.key)end if#keys==0 then return 0 end local _,count=fn(keys)return tonumber(count)or#keys end)if ok and n and n>0 then Stats.sold=Stats.sold+(n)clog(n.." units sold.")notify("Sell",n.." units sold.")return n end return 0 end local function towerRewardsAdd(rewards)for name,amt in pairs(rewards or{})do Stats.towerRewards[name]=(Stats.towerRewards[name]or 0)+(tonumber(amt)or 0)end end local lastTowerFloor=1 local function handleTowerSeq(seq,saw)local done=false for _,act in ipairs(seq)do if type(act)=="table"then if act.action=="floorStarted"and tonumber(act.floor)then lastTowerFloor=tonumber(act.floor)if lastTowerFloor%10==0 then clog("Tower floor "..lastTowerFloor)end elseif act.action=="ended"then done=true local hasRewards=act.rewards and next(act.rewards)if hasRewards then towerRewardsAdd(act.rewards)local parts={}for rn,ra in pairs(act.rewards)do table.insert(parts,ra.."x "..rn)end clog("Tower ended: "..table.concat(parts,", "))end if hasRewards and saw then local w=(Stats.towerWins[F.towerName]or 0)+1 Stats.towerWins[F.towerName]=w clog("Tower WIN counted.")elseif not hasRewards then clog("Tower wiped at floor "..lastTowerFloor.." (not counted).")else clog("Leftover rewards collected (not counted).")end break end end end return done end local function driveTower(step)local done,fails,saw=false,0,false while F.tower and Alive and not done do local ok,seq=pcall(step)if ok and type(seq)=="table"then if#seq>0 then fails=0 Stats.towerFloors=Stats.towerFloors+(1)for _,act in ipairs(seq)do if type(act)=="table"and act.action~="ended"then saw=true break end end done=handleTowerSeq(seq,saw)end task.wait(math.max(tonumber(F.towerDelay)or 2,0.5))else fails=fails+(1)if fails>=5 then done=true clog("Tower step failed 5 times, restarting loop.")end task.wait(2)end end end local function doTowerLoop()if Busy.tower then return end Busy.tower=true local play=getFn("Towers","PlayTower")local step=getFn("Towers","CompleteTowerFloor")if not play or not step then clog("Tower remote missing.")Busy.tower=false return end while F.tower and Alive do if F.towerEquipBest then local eb=getSig("Towers","EquipBestTowerTeam")if eb then pcall(function()eb:Fire()end)end task.wait(0.5)end local okStart,started=pcall(play,F.towerName)if okStart and started then clog("Tower started: "..F.towerName)lastTowerFloor=1 driveTower(step)task.wait(3)else local okP,seq=pcall(step)if okP and type(seq)=="table"and#seq>0 then clog("Found an active tower run, continuing it...")Stats.towerFloors=Stats.towerFloors+(1)local sawP=false for _,act in ipairs(seq)do if type(act)=="table"and act.action~="ended"then sawP=true break end end if not handleTowerSeq(seq,sawP)then driveTower(step)end task.wait(3)else clog("Tower failed to start: "..F.towerName.." (team/cooldown?)")task.wait(5)end end end pcall(function()local c=getFn("Towers","CancelTower")if c then c()end end)Busy.tower=false end local gradeSkipLogged={}local function targetAbove(mod,cur,set)if not mod then return false end local co=0 if cur and mod[cur]and mod[cur].order then co=mod[cur].order end for n in pairs(set)do local e=mod[n]if e and e.order and e.order>co then return true end end return false end local function doGradeTick(manual)if Busy.grade then return end if#F.gradeTargets==0 then if manual then notify("Grade","Select target grades first.")end return end if not G.GradesMod then return end Busy.grade=true pcall(function()if currencyAmount("Gems")<=F.gemReserve then return end local sig=getSig("GradeService","Roll")if not sig then return end local targets={}for _,n in ipairs(F.gradeTargets)do targets[n]=true end local sel={}if not F.gradeAll then for _,n in ipairs(F.gradeUnits)do sel[n]=true end end for key,e in pairs(inventory())do if isUnitEntry(e)and not(e.attributes and e.attributes.locked)then if F.gradeAll or sel[e.name]then local g=e.attributes and e.attributes.grade if not g or not targets[g]then local gd=g and G.GradesMod[g]if gd and gd.protected then if targetAbove(G.GradesMod,g,targets)then pcall(function()sig:Fire(key,true)end)clog("Grade FORCE-rolled past protected: "..tostring(e.name).." ("..tostring(g)..")")return end local lk=key.."|"..tostring(g)if not gradeSkipLogged[lk]then gradeSkipLogged[lk]=true clog("Kept protected grade (not rolled): "..tostring(e.name).." ("..tostring(g)..")")end else pcall(function()sig:Fire(key)end)clog("Grade rolled: "..tostring(e.name).." ("..tostring(g)..")")return end end end end if not Alive then return end end end)Busy.grade=false end local traitSkipLogged={}local function doTraitTick(manual)if Busy.trait then return end if#F.traitTargets==0 then if manual then notify("Trait","Select target traits first.")end return end if not G.TraitsMod then return end Busy.trait=true pcall(function()if currencyAmount("Trait Reroll")<=F.rerollReserve then return end local sig=getSig("TraitService","Roll")if not sig then return end local targets={}for _,n in ipairs(F.traitTargets)do targets[n]=true end local sel={}if not F.traitAll then for _,n in ipairs(F.traitUnits)do sel[n]=true end end for key,e in pairs(inventory())do if isUnitEntry(e)and not(e.attributes and e.attributes.locked)then if F.traitAll or sel[e.name]then local t=e.attributes and e.attributes.trait if not t or not targets[t]then local td=t and G.TraitsMod[t]if td and td.protected then if targetAbove(G.TraitsMod,t,targets)then pcall(function()sig:Fire(key,true)end)clog("Trait FORCE-rolled past protected: "..tostring(e.name).." ("..tostring(t)..")")return end local lk=key.."|"..tostring(t)if not traitSkipLogged[lk]then traitSkipLogged[lk]=true clog("Kept protected trait (not rolled): "..tostring(e.name).." ("..tostring(t)..")")end else pcall(function()sig:Fire(key)end)clog("Trait rolled: "..tostring(e.name).." ("..tostring(t)..")")return end end end end if not Alive then return end end end)Busy.trait=false end doClaimQuests=function()local sig=getSig("QuestService","Claim")if not sig or not G.QuestConfig then return end local now=0 pcall(function()now=workspace:GetServerTimeNow()end)for _,period in ipairs({"Daily","Weekly"})do local ok,q=pcall(function()return G.DC.Quests[period]()end)if ok and q and type(q)=="table"then local exp=tonumber(q.expiresAt)or 0 if exp==0 or exp>math.floor(now)then local defs={}pcall(function()defs=G.QuestConfig.Periods[period].quests end)local prog=q.progress or{}local claimed=q.claimed or{}for _,def in ipairs(defs or{})do if def.id and not claimed[def.id]and(tonumber(prog[def.id])or 0)>=(tonumber(def.target)or math.huge)then pcall(function()sig:Fire(period,def.id,exp)end)clog("Quest claimed: "..period.." "..def.id)task.wait(0.5)end if not Alive then break end end end end if not Alive then break end end end local function applyLoaded(data)if type(data)~="table"then return end local sF=data.F if type(sF)=="table"then for k,v in pairs(sF)do local cur=F[k]if cur~=nil and type(v)==type(cur)then if type(v)=="table"then local clean,okArr={},true for _,e in ipairs(v)do if type(e)~="string"then okArr=false break end table.insert(clean,e)end if okArr then F[k]=clean end else F[k]=v end end end end if U.sellInput then local tt=(type(data.thresholdText)=="string")and data.thresholdText or""pcall(function()U.sellInput:Set(tt,true)end)F.sellThreshold=parseCompact(tt)or 0 end if U.tradeInput then local tx=(type(data.tradeText)=="string")and data.tradeText or""pcall(function()U.tradeInput:Set(tx,true)end)F.tradeMoney=parseCompact(tx)or 0 end if U.rollMinT then local rx=(type(data.rollMinText)=="string")and data.rollMinText or""pcall(function()U.rollMinT:Set(rx,true)end)F.rollHookMin=parseCompact(rx)or 0 end for k,h in pairs(U)do if h and h.Set and k~="sellInput"then if k=="towerSel"then for lbl,n in pairs(towerByLabel)do if n==F.towerName then pcall(function()h:Set(lbl,true)end)break end end elseif k=="potions"then local back={}for _,n in ipairs(F.potions)do for lbl,m in pairs(potByLabel)do if m==n then table.insert(back,lbl)break end end end pcall(function()h:Set(back,true)end)elseif k=="upgCats"then pcall(function()h:Set(F.upgradeCats,true)end)elseif k=="gradeTargets"then local back={}for _,n in ipairs(F.gradeTargets)do for lbl,m in pairs(gradeByLabel)do if m==n then table.insert(back,lbl)break end end end pcall(function()h:Set(back,true)end)elseif k=="traitTargets"then local back={}for _,n in ipairs(F.traitTargets)do for lbl,m in pairs(traitByLabel)do if m==n then table.insert(back,lbl)break end end end pcall(function()h:Set(back,true)end)elseif k=="gradeUnits"or k=="traitUnits"then local map=(k=="gradeUnits")and gradeUnitByLabel or traitUnitByLabel buildUnitOptions(ownedUnitNames(),map)local keep={}for _,n in ipairs(F[k])do keep[n]=true end local back={}for lbl,n in pairs(map)do if keep[n]then table.insert(back,lbl)end end pcall(function()h:Set(back,true)end)elseif F[k]~=nil and type(F[k])~="table"then pcall(function()h:Set(F[k],true)end)end end end local s=getSig("RollService","SetAutoRoll")if s then pcall(function()s:Fire(F.autoRoll)end)end applyWS()if F.flyOn then setFly(true)end if F.sellSync and F.sellThreshold>0 then local s2=getSig("SellService","UpdateAutoSell")if s2 then pcall(function()s2:Fire(F.sellThreshold)end)end end if F.hideRolls then task.spawn(function()syncRollHidden()rollHideBackup(true)end)end end local function loadConfig()if typeof(readfile)~="function"or typeof(isfile)~="function"then return end local okE,has=pcall(function()return isfile(cfgPath())end)if not(okE and has)then return end local okR,txt=pcall(readfile,cfgPath())if not(okR and txt)then return end local okD,data=pcall(function()return HTS:JSONDecode(txt)end)if okD and type(data)=="table"then applyLoaded(data)clog("Settings loaded.")end end pcall(loadConfig)pcall(armReexec)pcall(watchRolls)pcall(function()local note=readHopNote()if note and note.job==game.JobId and(os.time()-(tonumber(note.time)or 0))<120 then local tries=tonumber(note.tries)or 0 if tries>=1 and tries<3 then writeHopNote(game.JobId,tries+1)task.spawn(function()task.wait(5)if Alive then notify("Server Hop","Same server, hopping again...")pcall(function()TS:Teleport(game.PlaceId,LocalPlayer)end)end end)elseif tries>=3 then writeHopNote(game.JobId,0)end end end)task.spawn(function()while Alive do task.wait(10)if F.saveSettings then pcall(saveNow)end end end)local function adhShutdown()Alive=false pcall(flyStop)pcall(function()local hum=LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")if hum then hum.PlatformStand=false end end)for _,c in ipairs(rollHideConns)do pcall(function()c:Disconnect()end)end table.clear(rollHideConns)for _,c in ipairs({noclipConn,charConn,afkConn,tradeListenerConn,rollWatchConn})do if c then pcall(function()c:Disconnect()end)end end noclipConn,charConn,afkConn,tradeListenerConn,rollWatchConn=nil,nil,nil,nil,nil end task.spawn(function()if typeof(getgenv)~="function"then return end while task.wait(2)do local out=false pcall(function()local g=getgenv()local c=g.ADH_Claim if type(c)=="table"and c.seq==ADH_SEQ then g.ADH_Claim={seq=ADH_SEQ,t=os.clock()}elseif type(c)=="table"and(tonumber(c.seq)or 0)>ADH_SEQ and(os.clock()-(tonumber(c.t)or 0))<8 then out=true elseif type(c)~="table"or(os.clock()-(tonumber(c.t)or 0))>=8 then g.ADH_Claim={seq=ADH_SEQ,t=os.clock()}end end)if out then pcall(adhShutdown)pcall(function()local w=getgenv().ADH_Window if w and type(w.Unload)=="function"then w:Unload()end end)return end end end)task.spawn(function()while Alive do task.wait(F.collectDelay)if F.collect then pcall(doCollect)end end end)task.spawn(function()while Alive do task.wait(F.levelDelay)if F.levelup then pcall(doLevelUp)end end end)task.spawn(function()while Alive do task.wait(F.placeDelay)if F.placeBest then pcall(doPlaceBest)end end end)task.spawn(function()while Alive do task.wait(F.upgradeDelay)if F.upgrades then pcall(doUpgrades)end end end)task.spawn(function()while Alive do task.wait(F.rebirthDelay)if F.rebirth then pcall(doRebirth)end end end)task.spawn(function()while Alive do task.wait(F.diceDelay)if F.buyDice or F.equipDice then pcall(doDice)end end end)task.spawn(function()while Alive do task.wait(F.potionDelay)if F.potionAuto then pcall(doPotionTick)end end end)task.spawn(function()while Alive do task.wait(F.gradeDelay)if F.gradeAuto then pcall(doGradeTick)end end end)task.spawn(function()while Alive do task.wait(F.traitDelay)if F.traitAuto then pcall(doTraitTick)end end end)task.spawn(function()while Alive do task.wait(3)if F.hideRolls then syncRollHidden()rollHideBackup(true)end end end)task.spawn(function()while Alive do task.wait(0.5)if F.hideTower and Busy.tower then setTowerHiddenUI()end end end)task.spawn(function()while Alive do task.wait(F.sellDelay)if F.sellAuto then pcall(doInstantSell)end end end)task.spawn(function()local last=0 while Alive do task.wait(30)if F.claimQuests then pcall(doClaimQuests)end pcall(statsHookTick)if F.sellSync and F.sellThreshold>0 and os.clock()-last>120 then last=os.clock()local s=getSig("SellService","UpdateAutoSell")if s then pcall(function()s:Fire(F.sellThreshold)end)end end end end)task.spawn(function()local was=false while Alive do task.wait(0.5)if F.tower and not was then was=true task.spawn(doTowerLoop)elseif not F.tower then was=false end end end)local lastCollectedTxt=""task.spawn(function()while Alive do task.wait(1)pcall(function()local txt="Total collected: "..fmt(Stats.collectedMoney)if txt~=lastCollectedTxt then lastCollectedTxt=txt pcall(function()collectLine:Set(txt)end)end setStat(towerStat,Stats.towerWins[F.towerName]or 0)setStat(floorStat,Stats.towerFloors)setStat(floorNowStat,lastTowerFloor)setStat(moneyStat,money())setStat(rollStat,rolls())setStat(soldStat,Stats.sold)local pn=0 pcall(function()for _ in pairs(activePotions())do pn=pn+(1)end end)setStat(potionStat,pn)end)end end)notify("Anime Dice Perfectus Hub","Loaded. Pick a tab and enable features.")log("Hub started.")
+<font color="#4ade80">•</font> Auto Execute on teleport with your own loadstring]]
+})
+
+tStats:CreateDivider({ text = "General" })
+tStats:CreateButton({ name = "Reset Growth Stats", callback = function()
+    pcall(function() moneyStat:ResetBaseline() end)
+    pcall(function() rollStat:ResetBaseline() end)
+end })
+tStats:CreateKeybind({ name = "Menu Key", value = Enum.KeyCode.RightShift,
+    callback = function() pcall(function() window:ToggleHide() end) end })
+tStats:CreateButton({ name = "Close Menu (Unload)", callback = function()
+    pcall(adhShutdown)
+    F.tower = false
+    pcall(function() local c = getFn("Towers", "CancelTower") if c then c() end end)
+    pcall(function()
+        if typeof(getgenv) == "function" then getgenv().ADH_Heartbeat = nil end
+    end)
+    pcall(function() window:Unload() end)
+end })
+
+-- ---- Settings ----
+tSettings:CreateDivider({ text = "Settings Saving" })
+U.saveSettings = tSettings:CreateToggle({ name = "Auto Save Settings", value = true,
+    callback = function(v)
+        F.saveSettings = v
+        if v then pcall(saveNow) end
+    end })
+tSettings:CreateDivider({ text = "Server" })
+tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
+tSettings:CreateButton({ name = "Server Hop", callback = function() doHop(false) end })
+tSettings:CreateButton({ name = "Hop: Low Player Server", callback = function() doHop(true) end })
+tSettings:CreateDivider({ text = "Auto Execute" })
+U.reexec = tSettings:CreateToggle({ name = "Auto Execute On Teleport", value = true,
+    callback = function(v) F.reexec = v end })
+tSettings:CreateDivider({ text = "Character" })
+U.wsOn = tSettings:CreateToggle({ name = "WalkSpeed", value = false,
+    callback = function(v) F.wsOn = v applyWS() end })
+U.wsValue = tSettings:CreateSlider({ name = "WalkSpeed Value", range = { 16, 250 }, increment = 1, value = 16,
+    callback = function(v) F.wsValue = math.floor(v) applyWS() end })
+U.flyOn = tSettings:CreateToggle({ name = "Fly (WASD + Space/Shift)", value = false,
+    callback = function(v) setFly(v) end })
+U.flySpeed = tSettings:CreateSlider({ name = "Fly Speed", range = { 10, 200 }, increment = 5, value = 50,
+    callback = function(v) F.flySpeed = v end })
+U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
+    callback = function(v) F.noclip = v end })
+U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
+    callback = function(v) F.afk = v end })
+tSettings:CreateDivider({ text = "Performance" })
+tSettings:CreateButton({ name = "FPS Boost", callback = function() fpsBoost() end })
+
+-- ---- Webhook ----
+tHooks:CreateDivider({ text = "Roll Alerts" })
+U.rollHookUrl = tHooks:CreateInput({ name = "Roll Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
+    callback = function(t) F.rollHookUrl = t end })
+U.rollHookOn = tHooks:CreateToggle({ name = "Roll Alerts", value = false,
+    callback = function(v) F.rollHookOn = v end })
+U.rollMinT = tHooks:CreateInput({ name = "Roll Min Chance", value = "", placeholder = "e.g. 1b - only above this is sent",
+    callback = function(t) F.rollHookMin = parseCompact(t) or 0 end })
+tHooks:CreateDivider({ text = "Stat Reports" })
+U.statHookUrl = tHooks:CreateInput({ name = "Stat Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
+    callback = function(t) F.statHookUrl = t end })
+U.statHookOn = tHooks:CreateToggle({ name = "Stat Reports", value = false,
+    callback = function(v) F.statHookOn = v end })
+U.statHookInterval = tHooks:CreateSlider({ name = "Stat Report Interval", range = { 60, 1800 }, increment = 60, value = 300, suffix = "s",
+    callback = function(v) F.statHookInterval = math.floor(v) end })
+tHooks:CreateButton({ name = "Send Test Stats", callback = function()
+    task.spawn(function()
+        if type(F.statHookUrl) == "string" and F.statHookUrl ~= "" then
+            notify("Webhook", sendStatsHook(F.statHookUrl) and "Test sent." or "Send failed.")
+        else
+            notify("Webhook", "Set a stat webhook URL first.")
+        end
+    end)
+end })
+
+if not G.ok or #G.missing > 0 then
+    notify("Warning", "Some modules failed to load: " .. table.concat(G.missing, ", "))
+    clog("MISSING: " .. table.concat(G.missing, ", "))
+else
+    clog("Ready. Money: " .. fmt(money()))
+end
+
+-- ============ WORKER LOGIC ============
+local function doCollect()
+    local sig = getSig("PlotService", "CollectBalance")
+    if not sig then return end
+    local list, s = unlockedSlots()
+    for _, slot in ipairs(list) do
+        if not F.collect or not Alive then break end
+        local d = s[tostring(slot)]
+        local amt = d and (tonumber(d.balance) or 0) or 0
+        if amt > 0 then
+            pcall(function() sig:Fire(slot) end)
+            Stats.collectedMoney += amt
+            task.wait(0.15)
+        end
+    end
+end
+
+local function doLevelUp()
+    local sig = getSig("PlotService", "LevelUpSlot")
+    if not sig then return end
+    local list, s = unlockedSlots()
+    local cands = {}
+    for _, slot in ipairs(list) do
+        local d = s[tostring(slot)]
+        local uid = d and d.unitId
+        if uid then
+            local e = invEntry(uid)
+            if e and e.attributes then
+                local lvl = tonumber(e.attributes.level) or 1
+                if lvl < F.maxLevel then
+                    local price = 0
+                    pcall(function() price = G.UnitUtil.GetLevelPrice(e.name, e.attributes) end)
+                    table.insert(cands, { slot = slot, lvl = lvl, price = price })
+                end
+            end
+        end
+        if not F.levelup or not Alive then break end
+    end
+    table.sort(cands, function(a, b) return a.lvl < b.lvl end)
+    local m = money()
+    for i = 1, math.min(2, #cands) do
+        local c = cands[i]
+        if m >= c.price then
+            pcall(function() sig:Fire(c.slot) end)
+            Stats.leveled += 1
+            m -= c.price
+            task.wait(0.4)
+        end
+    end
+end
+
+local function doEquip(key)
+    local ok = pcall(function() return G.UnitController.Equip(key) end)
+    if ok then task.wait(0.4) return true end
+    return false
+end
+local function doPlaceBest()
+    if Busy.place then return end
+    Busy.place = true
+    local ok, err = pcall(function()
+        local list, s = unlockedSlots()
+        local placed, placedKeys = {}, {}
+        for _, slot in ipairs(list) do
+            local d = s[tostring(slot)]
+            if d and d.unitId then
+                local e = invEntry(d.unitId)
+                if e then
+                    placed[slot] = { key = d.unitId, chance = unitChance(e), name = e.name }
+                    placedKeys[d.unitId] = true
+                end
+            end
+        end
+        local best, bestChance = nil, 0
+        for key, e in pairs(inventory()) do
+            if isUnitEntry(e) and not placedKeys[key] and key ~= equippedKey() then
+                if not (e.attributes and e.attributes.locked) then
+                    local ch = unitChance(e)
+                    if ch > bestChance then best, bestChance = key, ch end
+                end
+            end
+        end
+        if not best then return end
+        for _, slot in ipairs(list) do
+            if not s[tostring(slot)] or not s[tostring(slot)].unitId then
+                if doEquip(best) then
+                    local sig = getSig("PlotService", "InteractSlot")
+                    if sig then pcall(function() sig:Fire(slot) end) end
+                    waitVerify(function()
+                        local d = slots()[tostring(slot)]
+                        return d and d.unitId == best
+                    end, 3)
+                    clog("Placed: " .. tostring((invEntry(best) or {}).name) .. " -> slot " .. slot)
+                end
+                return
+            end
+        end
+        if not F.replaceWorst then return end
+        local worstSlot, worst = nil, nil
+        for slot, info in pairs(placed) do
+            if not worst or info.chance < worst then worstSlot, worst = slot, info.chance end
+        end
+        if worstSlot and bestChance > worst then
+            local sig = getSig("PlotService", "InteractSlot")
+            if not sig then return end
+            pcall(function() sig:Fire(worstSlot) end) -- pick back up
+            local emptied = waitVerify(function()
+                local d = slots()[tostring(worstSlot)]
+                return not (d and d.unitId)
+            end, 3)
+            if not emptied then
+                local eb = getSig("PlotService", "EquipBest")
+                if eb then pcall(function() eb:Fire() end) end
+                return
+            end
+            task.wait(0.3)
+            if doEquip(best) then
+                pcall(function() sig:Fire(worstSlot) end)
+                waitVerify(function()
+                    local d = slots()[tostring(worstSlot)]
+                    return d and d.unitId == best
+                end, 3)
+                clog("Swapped: slot " .. worstSlot .. " (" .. fmt(worst) .. " -> " .. fmt(bestChance) .. ")")
+            end
+        end
+    end)
+    if not ok then clog("Place error: " .. tostring(err)) end
+    Busy.place = false
+end
+
+local function catOf(name)
+    for _, c in ipairs({ "Roll Speed", "Unit Storage", "Money", "Luck", "Fortune", "Damage", "Sell", "Health", "Walkspeed", "Income" }) do
+        if name:sub(1, #c) == c then return c end
+    end
+    return nil
+end
+local function doUpgrades()
+    local sig = buyUpgradeSig()
+    if not sig then return end
+    local owned = {}
+    pcall(function() owned = G.DC.Upgrades() or {} end)
+    local list = {}
+    for name, data in pairs(G.Upgrades) do
+        if type(data) == "table" and data.price and not owned[name] and name ~= "Start" then
+            if #F.upgradeCats == 0 then
+                table.insert(list, { name = name, price = data.price })
+            else
+                local c = catOf(name)
+                for _, want in ipairs(F.upgradeCats) do
+                    if c == want then table.insert(list, { name = name, price = data.price }) break end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.price < b.price end)
+    local m = money()
+    for _, u in ipairs(list) do
+        if m >= u.price then
+            local ok = pcall(function() sig:Fire(u.name) end)
+            if ok then Stats.upgraded += 1 clog("Upgrade: " .. u.name) end
+            break -- one per cycle (anti-spam)
+        else
+            break -- cheapest still too expensive
+        end
+    end
+end
+
+local function doRebirth()
+    local next = nil
+    pcall(function() next = G.Rebirths.GetNext(rebirth()) end)
+    if not next then return end
+    if money() >= (next.cost or math.huge) then
+        local s = getSig("RebirthService", "Rebirth")
+        if s then
+            pcall(function() s:Fire() end)
+            Stats.rebirthed += 1
+            clog("Rebirth done!")
+            notify("Rebirth", "Rebirth done.")
+            task.wait(8)
+        end
+    end
+end
+
+local function bestDiceOwned()
+    local owned = {}
+    pcall(function() owned = G.DC.OwnedDice() or {} end)
+    local cur = nil
+    pcall(function() cur = G.DC.Dice() end)
+    local all = G.DiceMod.GetAll()
+    local best, bestLuck = cur, -1
+    for name in pairs(owned) do
+        local d = all[name]
+        if d and (d.luck or 0) > bestLuck then best, bestLuck = name, d.luck end
+    end
+    return best, cur
+end
+local function doDice()
+    if Busy.dice then return end
+    Busy.dice = true
+    pcall(function()
+        local all = G.DiceMod.GetAll()
+        local m = money()
+        if F.buyDice then
+            local ordered = {}
+            for name, d in pairs(all) do
+                if d.price then table.insert(ordered, { name = name, price = d.price, luck = d.luck or 0 }) end
+            end
+            table.sort(ordered, function(a, b) return a.luck > b.luck end)
+            local owned = {}
+            pcall(function() owned = G.DC.OwnedDice() or {} end)
+            for _, d in ipairs(ordered) do
+                if not owned[d.name] and m >= d.price then
+                    local s = getSig("DiceShopService", "BuyDice")
+                    if s then pcall(function() s:Fire(d.name) end) end
+                    clog("Dice bought: " .. d.name)
+                    task.wait(0.6)
+                    break
+                end
+            end
+        end
+        if F.equipDice then
+            local best, cur = bestDiceOwned()
+            if best and best ~= cur then
+                local s = getSig("DiceShopService", "EquipDice")
+                if s then pcall(function() s:Fire(best) end) end
+            end
+        end
+    end)
+    Busy.dice = false
+end
+
+-- Remaining time: server keeps ActiveEntries {remaining, startedAt}; re-using the same
+-- name extends duration; only the highest tier per category applies (BoostService).
+local function potionLeft(entry)
+    if not entry or type(entry) ~= "table" then return 0 end
+    if type(entry.startedAt) == "number" and type(entry.remaining) == "number" then
+        local now = 0
+        pcall(function() now = workspace:GetServerTimeNow() end)
+        return math.max(0, entry.remaining - math.max(0, now - entry.startedAt))
+    end
+    if type(entry.expiresAt) == "number" then
+        local t = 0
+        pcall(function() t = os.time() end)
+        return math.max(0, entry.expiresAt - t)
+    end
+    if type(entry.remaining) == "number" then return math.max(0, entry.remaining) end
+    return 1e9 -- entry exists but time unreadable: count as active
+end
+local function activePotions()
+    local out = {}
+    local ok, ae = pcall(function() return G.DC.ActiveEntries() end)
+    if not ok or type(ae) ~= "table" then return out end
+    for name, e in pairs(ae) do
+        if type(e) == "table" then
+            if potionLeft(e) > 3 then out[name] = potionLeft(e) end
+        elseif e then
+            out[name] = 1e9
+        end
+    end
+    return out
+end
+local function potionKeys()
+    local out = {}
+    for key, e in pairs(inventory()) do
+        if type(e) == "table" and e.name and (tonumber(e.amount) or 0) >= 1 then
+            local ok, cfg = pcall(function() return G.EntryRegistry.getEntryConfig(e.name) end)
+            if ok and cfg and cfg.kind == "Boost" then out[e.name] = key end
+        end
+    end
+    return out
+end
+doPotionTick = function()
+    if Busy.potion then return end
+    if not G.BoostConfig or not G.BoostConfig.entries then return end
+    Busy.potion = true
+    pcall(function()
+        if #F.potions == 0 then return end
+        local entries = G.BoostConfig.entries
+        local have = potionKeys()
+        local active = activePotions()
+        local cands = {}
+        for _, name in ipairs(F.potions) do
+            local e = entries[name]
+            if e and have[name] then
+                table.insert(cands, { name = name, cat = e.category, tier = e.tier or 0, key = have[name] })
+            end
+        end
+        if F.potionBest then
+            local best = {}
+            for _, c in ipairs(cands) do
+                if not best[c.cat] or c.tier > best[c.cat].tier then best[c.cat] = c end
+            end
+            cands = {}
+            for _, c in pairs(best) do table.insert(cands, c) end
+        end
+        local activeTier = {}
+        for aname in pairs(active) do
+            local ae = entries[aname]
+            if ae then
+                local t = ae.tier or 0
+                if not activeTier[ae.category] or t > activeTier[ae.category] then activeTier[ae.category] = t end
+            end
+        end
+        local sig = getSig("BoostService", "Use")
+        if not sig then return end
+        for _, c in ipairs(cands) do
+            if (active[c.name] or 0) > 0 and not F.potionExtend then
+                -- same potion active: waiting for expiry
+            elseif (activeTier[c.cat] or 0) > c.tier then
+                clog("Skipped (higher tier active in category): " .. c.name)
+            else
+                pcall(function() sig:Fire(c.key) end)
+                Stats.potions += 1
+                clog("Potion used: " .. c.name)
+                task.wait(0.5)
+            end
+        end
+    end)
+    Busy.potion = false
+end
+showPotions = function()
+    local active = activePotions()
+    local n = 0
+    for name, left in pairs(active) do
+        n += 1
+        clog("Active: " .. name .. " - " .. math.floor(left / 60) .. "m " .. math.floor(left % 60) .. "s left")
+    end
+    if n == 0 then clog("No active potions.") end
+    notify("Potion", n .. " active potion(s).")
+end
+
+doInstantSell = function()
+    if F.sellThreshold <= 0 then notify("Sell", "Set a threshold first (e.g. 1t).") return 0 end
+    local fn = getFn("SellService", "SellInventory")
+    if not fn then return 0 end
+    local ok, n = pcall(function()
+        local s = slots()
+        local inSlot, inTower = {}, {}
+        for _, d in pairs(s) do if d.unitId then inSlot[d.unitId] = true end end
+        pcall(function() for _, k in pairs(G.DC.TowerTeam() or {}) do inTower[k] = true end end)
+        local eq = equippedKey()
+        local cands = {}
+        for key, e in pairs(inventory()) do
+            if isUnitEntry(e) and key ~= eq and not inSlot[key] and not inTower[key] then
+                if not (e.attributes and e.attributes.locked) then
+                    local ch = unitChance(e)
+                    if ch > 0 and ch < F.sellThreshold then
+                        table.insert(cands, { key = key, chance = ch })
+                    end
+                end
+            end
+        end
+        table.sort(cands, function(a, b) return a.chance < b.chance end)
+        local keys = {}
+        for i, c in ipairs(cands) do
+            if i > #cands - F.keepBest then break end
+            table.insert(keys, c.key)
+        end
+        if #keys == 0 then return 0 end
+        local _, count = fn(keys)
+        return tonumber(count) or #keys
+    end)
+    if ok and n and n > 0 then
+        Stats.sold += n
+        clog(n .. " units sold.")
+        notify("Sell", n .. " units sold.")
+        return n
+    end
+    return 0
+end
+
+local function towerRewardsAdd(rewards)
+    for name, amt in pairs(rewards or {}) do
+        Stats.towerRewards[name] = (Stats.towerRewards[name] or 0) + (tonumber(amt) or 0)
+    end
+end
+local lastTowerFloor = 1
+local function handleTowerSeq(seq, saw)
+    local done = false
+    for _, act in ipairs(seq) do
+        if type(act) == "table" then
+            if act.action == "floorStarted" and tonumber(act.floor) then
+                lastTowerFloor = tonumber(act.floor)
+                if lastTowerFloor % 10 == 0 then clog("Tower floor " .. lastTowerFloor) end
+            elseif act.action == "ended" then
+                done = true
+                local hasRewards = act.rewards and next(act.rewards)
+                if hasRewards then
+                    towerRewardsAdd(act.rewards)
+                    local parts = {}
+                    for rn, ra in pairs(act.rewards) do table.insert(parts, ra .. "x " .. rn) end
+                    clog("Tower ended: " .. table.concat(parts, ", "))
+                end
+                if hasRewards and saw then
+                    local w = (Stats.towerWins[F.towerName] or 0) + 1
+                    Stats.towerWins[F.towerName] = w
+                    clog("Tower WIN counted.")
+                elseif not hasRewards then
+                    clog("Tower wiped at floor " .. lastTowerFloor .. " (not counted).")
+                else
+                    clog("Leftover rewards collected (not counted).")
+                end
+                break
+            end
+        end
+    end
+    return done
+end
+local function driveTower(step)
+    local done, fails, saw = false, 0, false
+    while F.tower and Alive and not done do
+        local ok, seq = pcall(step)
+        if ok and type(seq) == "table" then
+            if #seq > 0 then
+                fails = 0
+                Stats.towerFloors += 1
+                for _, act in ipairs(seq) do
+                    if type(act) == "table" and act.action ~= "ended" then saw = true break end
+                end
+                done = handleTowerSeq(seq, saw)
+            end
+            task.wait(math.max(tonumber(F.towerDelay) or 2, 0.5))
+        else
+            fails += 1
+            if fails >= 5 then done = true clog("Tower step failed 5 times, restarting loop.") end
+            task.wait(2)
+        end
+    end
+end
+local function doTowerLoop()
+    if Busy.tower then return end
+    Busy.tower = true
+    local play = getFn("Towers", "PlayTower")
+    local step = getFn("Towers", "CompleteTowerFloor")
+    if not play or not step then clog("Tower remote missing.") Busy.tower = false return end
+    while F.tower and Alive do
+        if F.towerEquipBest then
+            local eb = getSig("Towers", "EquipBestTowerTeam")
+            if eb then pcall(function() eb:Fire() end) end
+            task.wait(0.5)
+        end
+        local okStart, started = pcall(play, F.towerName)
+        if okStart and started then
+            clog("Tower started: " .. F.towerName)
+            lastTowerFloor = 1
+            driveTower(step)
+            task.wait(3)
+        else
+            local okP, seq = pcall(step)
+            if okP and type(seq) == "table" and #seq > 0 then
+                clog("Found an active tower run, continuing it...")
+                Stats.towerFloors += 1
+                local sawP = false
+                for _, act in ipairs(seq) do
+                    if type(act) == "table" and act.action ~= "ended" then sawP = true break end
+                end
+                if not handleTowerSeq(seq, sawP) then driveTower(step) end
+                task.wait(3)
+            else
+                clog("Tower failed to start: " .. F.towerName .. " (team/cooldown?)")
+                task.wait(5)
+            end
+        end
+    end
+    pcall(function() local c = getFn("Towers", "CancelTower") if c then c() end end)
+    Busy.tower = false
+end
+
+local gradeSkipLogged = {}
+local function targetAbove(mod, cur, set)
+    if not mod then return false end
+    local co = 0
+    if cur and mod[cur] and mod[cur].order then co = mod[cur].order end
+    for n in pairs(set) do
+        local e = mod[n]
+        if e and e.order and e.order > co then return true end
+    end
+    return false
+end
+local function doGradeTick(manual)
+    if Busy.grade then return end
+    if #F.gradeTargets == 0 then if manual then notify("Grade", "Select target grades first.") end return end
+    if not G.GradesMod then return end
+    Busy.grade = true
+    pcall(function()
+        if currencyAmount("Gems") <= F.gemReserve then return end
+        local sig = getSig("GradeService", "Roll")
+        if not sig then return end
+        local targets = {}
+        for _, n in ipairs(F.gradeTargets) do targets[n] = true end
+        local sel = {}
+        if not F.gradeAll then for _, n in ipairs(F.gradeUnits) do sel[n] = true end end
+        for key, e in pairs(inventory()) do
+            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) then
+                if F.gradeAll or sel[e.name] then
+                    local g = e.attributes and e.attributes.grade
+                    if not g or not targets[g] then
+                        local gd = g and G.GradesMod[g]
+                        if gd and gd.protected then
+                            if targetAbove(G.GradesMod, g, targets) then
+                                pcall(function() sig:Fire(key, true) end)
+                                clog("Grade FORCE-rolled past protected: " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
+                                return
+                            end
+                            local lk = key .. "|" .. tostring(g)
+                            if not gradeSkipLogged[lk] then
+                                gradeSkipLogged[lk] = true
+                                clog("Kept protected grade (not rolled): " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
+                            end
+                        else
+                            pcall(function() sig:Fire(key) end)
+                            clog("Grade rolled: " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
+                            return
+                        end
+                    end
+                end
+            end
+            if not Alive then return end
+        end
+    end)
+    Busy.grade = false
+end
+local traitSkipLogged = {}
+local function doTraitTick(manual)
+    if Busy.trait then return end
+    if #F.traitTargets == 0 then if manual then notify("Trait", "Select target traits first.") end return end
+    if not G.TraitsMod then return end
+    Busy.trait = true
+    pcall(function()
+        if currencyAmount("Trait Reroll") <= F.rerollReserve then return end
+        local sig = getSig("TraitService", "Roll")
+        if not sig then return end
+        local targets = {}
+        for _, n in ipairs(F.traitTargets) do targets[n] = true end
+        local sel = {}
+        if not F.traitAll then for _, n in ipairs(F.traitUnits) do sel[n] = true end end
+        for key, e in pairs(inventory()) do
+            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) then
+                if F.traitAll or sel[e.name] then
+                    local t = e.attributes and e.attributes.trait
+                    if not t or not targets[t] then
+                        local td = t and G.TraitsMod[t]
+                        if td and td.protected then
+                            if targetAbove(G.TraitsMod, t, targets) then
+                                pcall(function() sig:Fire(key, true) end)
+                                clog("Trait FORCE-rolled past protected: " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
+                                return
+                            end
+                            local lk = key .. "|" .. tostring(t)
+                            if not traitSkipLogged[lk] then
+                                traitSkipLogged[lk] = true
+                                clog("Kept protected trait (not rolled): " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
+                            end
+                        else
+                            pcall(function() sig:Fire(key) end)
+                            clog("Trait rolled: " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
+                            return
+                        end
+                    end
+                end
+            end
+            if not Alive then return end
+        end
+    end)
+    Busy.trait = false
+end
+
+doClaimQuests = function()
+    local sig = getSig("QuestService", "Claim")
+    if not sig or not G.QuestConfig then return end
+    local now = 0
+    pcall(function() now = workspace:GetServerTimeNow() end)
+    for _, period in ipairs({ "Daily", "Weekly" }) do
+        local ok, q = pcall(function() return G.DC.Quests[period]() end)
+        if ok and q and type(q) == "table" then
+            local exp = tonumber(q.expiresAt) or 0
+            if exp == 0 or exp > math.floor(now) then
+                local defs = {}
+                pcall(function() defs = G.QuestConfig.Periods[period].quests end)
+                local prog = q.progress or {}
+                local claimed = q.claimed or {}
+                for _, def in ipairs(defs or {}) do
+                    if def.id and not claimed[def.id] and (tonumber(prog[def.id]) or 0) >= (tonumber(def.target) or math.huge) then
+                        pcall(function() sig:Fire(period, def.id, exp) end)
+                        clog("Quest claimed: " .. period .. " " .. def.id)
+                        task.wait(0.5)
+                    end
+                    if not Alive then break end
+                end
+            end
+        end
+        if not Alive then break end
+    end
+end
+
+--[[TRADE-ENGINE-DISABLED (remove this line and the closing line to re-enable)
+-- ---- Auto Trade engine ----
+local tradeEvt = { name = "", time = 0, data = nil }
+local tradeEvtConnected = false
+local function tradeEnsureListener()
+    if tradeEvtConnected then return end
+    local s = getSig("TradeService", "TradeEvent")
+    if not s then return end
+    local ok = pcall(function()
+        tradeListenerConn = s:Connect(function(ev, a)
+            tradeEvt = { name = tostring(ev), time = os.clock(), data = a }
+        end)
+    end)
+    if ok then tradeEvtConnected = true end
+end
+local function otherMoney(p)
+    local ls = p:FindFirstChild("leaderstats")
+    local m = ls and ls:FindFirstChild("Money")
+    if not (m and typeof(m.Value) == "string") then return 0 end
+    return parseCompact(m.Value) or 0
+end
+local function otherRolls(p)
+    local ls = p:FindFirstChild("leaderstats")
+    local r = ls and ls:FindFirstChild("Rolls")
+    if r then return tonumber(r.Value) or 0 end
+    return 0
+end
+local function tradeTargets()
+    local list = {}
+    if F.tradeMoney <= 0 then return list end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local mv = otherMoney(p)
+            if mv >= F.tradeMoney and otherRolls(p) >= 1000 then table.insert(list, { p = p, money = mv }) end
+        end
+    end
+    table.sort(list, function(a, b) return a.money > b.money end)
+    return list
+end
+local function waitTradeEvent(names, timeout)
+    local t0 = os.clock()
+    while os.clock() - t0 < timeout do
+        if not F.tradeAuto or not Alive then return nil end
+        if tradeEvt.time > t0 and names[tradeEvt.name] then return tradeEvt.name end
+        task.wait(0.25)
+    end
+    return nil
+end
+local function countOffer(off)
+    if type(off) ~= "table" then return 0 end
+    local n = 0
+    for _ in pairs(off) do n += 1 end
+    return n
+end
+local tradeDriving = false
+local function tradeScreenOpen()
+    local ok, v = pcall(function() return G.UIRefs.Root.Trading.TradeScreen.Visible end)
+    return ok and v and true or false
+end
+local function driveTrade()
+    if tradeDriving then return end
+    local adv = getSig("TradeService", "AdvanceTrade")
+    if not adv then return end
+    tradeDriving = true
+    local readyTries, accTries = 0, 0
+    local t0 = os.clock()
+    while F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 < 300 do
+        local d = tradeEvt.data
+        if type(d) == "table" then
+            if d.phase == "Offer" then
+                local oReady = d.otherReady and true or false
+                local meReady = d.ownReady and true or false
+                local need = (not F.tradeNeedOffer) or (tonumber(F.tradeMinItems) or 1) <= 0 or countOffer(d.otherOffer) >= math.max(1, tonumber(F.tradeMinItems) or 1)
+                if oReady and not meReady and need and readyTries < 3 then
+                    readyTries += 1
+                    pcall(function() adv:Fire() end)
+                    clog("Trade: auto-ready")
+                    task.wait(1)
+                end
+            elseif d.phase == "Confirm" then
+                local meAcc = d.ownAccepted and true or false
+                if not meAcc and accTries < 3 then
+                    accTries += 1
+                    pcall(function() adv:Fire() end)
+                    clog("Trade: auto-accept")
+                    task.wait(2)
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+    tradeDriving = false
+    if F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 >= 300 then
+        local c = getSig("TradeService", "CancelTrade")
+        if c then pcall(function() c:Fire() end) end
+        clog("Trade: timed out, cancelled.")
+    end
+end
+local tradeActive = false
+local lastTradeEnd = 0
+local function tradePlayer(plr)
+    local req = getSig("TradeService", "RequestTrade")
+    if not req then return false end
+    local cd = 6
+    pcall(function() cd = (G.TradeConfig and G.TradeConfig.REQUEST_COOLDOWN) or 6 end)
+    local tries = math.max(1, tonumber(F.tradeRetries) or 3)
+    for a = 1, tries do
+        if not F.tradeAuto or not Alive then return false end
+        if not plr.Parent then return false end
+        tradeEvt = { name = "", time = 0, data = nil }
+        pcall(function() req:Fire(plr) end)
+        Stats.tradesSent += 1
+        clog("Trade request: " .. plr.DisplayName .. " (" .. a .. "/" .. tries .. ")")
+        local ev = waitTradeEvent({ Started = true, RequestExpired = true, RequestClosed = true, Ended = true }, 8)
+        if ev == "Started" then
+            Stats.tradesOpened += 1
+            notify("Trade", plr.DisplayName .. " accepted!")
+            clog("Trade OPEN with " .. plr.DisplayName .. ".")
+            tradeEvt.data = nil
+            waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
+            lastTradeEnd = os.clock()
+            return true
+        end
+        task.wait(1)
+    end
+    clog("Trade: no answer from " .. plr.DisplayName)
+    return false
+end
+local tradeTried = {}
+local function doTradeLoop()
+    if Busy.trade then return end
+    Busy.trade = true
+    tradeActive = false
+    pcall(function()
+        local en = getSig("TradeService", "SetTradeRequestsEnabled")
+        if en then en:Fire(true) end
+    end)
+    tradeEnsureListener()
+    if AUTOEXEC_CODE:find("PASTE_YOUR") then clog("Trade: set AUTOEXEC_CODE or hopping strands you.") end
+    while F.tradeAuto and Alive do
+        local cands = {}
+        for _, c in ipairs(tradeTargets()) do
+            if not tradeTried[c.p.UserId] then table.insert(cands, c) end
+        end
+        if #cands == 0 then
+            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) then
+                clog("Trade: nobody matches, hopping...")
+                tradeTried = {}
+                doHop(false)
+                local t = 0
+                while F.tradeAuto and Alive and t < 25 do task.wait(1) t += 1 end
+            else
+                task.wait(8)
+            end
+        else
+            if tradeScreenOpen() then
+                task.wait(3)
+            else
+                local c = cands[1]
+                tradePlayer(c.p)
+                tradeTried[c.p.UserId] = true
+                task.wait(1)
+            end
+        end
+    end
+    Busy.trade = false
+end
+--TRADE-ENGINE-DISABLED]]
+
+-- ============ CONFIG SAVE/LOAD (per UserId) ============
+local function applyLoaded(data)
+    if type(data) ~= "table" then return end
+    local sF = data.F
+    if type(sF) == "table" then
+        for k, v in pairs(sF) do
+            local cur = F[k]
+            if cur ~= nil and type(v) == type(cur) then
+                if type(v) == "table" then
+                    local clean, okArr = {}, true
+                    for _, e in ipairs(v) do
+                        if type(e) ~= "string" then okArr = false break end
+                        table.insert(clean, e)
+                    end
+                    if okArr then F[k] = clean end
+                else
+                    F[k] = v
+                end
+            end
+        end
+    end
+    if U.sellInput then
+        local tt = (type(data.thresholdText) == "string") and data.thresholdText or ""
+        pcall(function() U.sellInput:Set(tt, true) end)
+        F.sellThreshold = parseCompact(tt) or 0
+    end
+    if U.tradeInput then
+        local tx = (type(data.tradeText) == "string") and data.tradeText or ""
+        pcall(function() U.tradeInput:Set(tx, true) end)
+        F.tradeMoney = parseCompact(tx) or 0
+    end
+    if U.rollMinT then
+        local rx = (type(data.rollMinText) == "string") and data.rollMinText or ""
+        pcall(function() U.rollMinT:Set(rx, true) end)
+        F.rollHookMin = parseCompact(rx) or 0
+    end
+    for k, h in pairs(U) do
+        if h and h.Set and k ~= "sellInput" then
+            if k == "towerSel" then
+                for lbl, n in pairs(towerByLabel) do
+                    if n == F.towerName then pcall(function() h:Set(lbl, true) end) break end
+                end
+            elseif k == "potions" then
+                local back = {}
+                for _, n in ipairs(F.potions) do
+                    for lbl, m in pairs(potByLabel) do
+                        if m == n then table.insert(back, lbl) break end
+                    end
+                end
+                pcall(function() h:Set(back, true) end)
+            elseif k == "upgCats" then
+                pcall(function() h:Set(F.upgradeCats, true) end)
+            elseif k == "gradeTargets" then
+                local back = {}
+                for _, n in ipairs(F.gradeTargets) do for lbl, m in pairs(gradeByLabel) do if m == n then table.insert(back, lbl) break end end end
+                pcall(function() h:Set(back, true) end)
+            elseif k == "traitTargets" then
+                local back = {}
+                for _, n in ipairs(F.traitTargets) do for lbl, m in pairs(traitByLabel) do if m == n then table.insert(back, lbl) break end end end
+                pcall(function() h:Set(back, true) end)
+            elseif k == "gradeUnits" or k == "traitUnits" then
+                local map = (k == "gradeUnits") and gradeUnitByLabel or traitUnitByLabel
+                buildUnitOptions(ownedUnitNames(), map)
+                local keep = {}
+                for _, n in ipairs(F[k]) do keep[n] = true end
+                local back = {}
+                for lbl, n in pairs(map) do if keep[n] then table.insert(back, lbl) end end
+                pcall(function() h:Set(back, true) end)
+            elseif F[k] ~= nil and type(F[k]) ~= "table" then
+                pcall(function() h:Set(F[k], true) end)
+            end
+        end
+    end
+    local s = getSig("RollService", "SetAutoRoll")
+    if s then pcall(function() s:Fire(F.autoRoll) end) end
+    applyWS()
+    if F.flyOn then setFly(true) end
+    if F.sellSync and F.sellThreshold > 0 then
+        local s2 = getSig("SellService", "UpdateAutoSell")
+        if s2 then pcall(function() s2:Fire(F.sellThreshold) end) end
+    end
+    if F.hideRolls then task.spawn(function() syncRollHidden() rollHideBackup(true) end) end
+end
+local function loadConfig()
+    if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
+    local okE, has = pcall(function() return isfile(cfgPath()) end)
+    if not (okE and has) then return end
+    local okR, txt = pcall(readfile, cfgPath())
+    if not (okR and txt) then return end
+    local okD, data = pcall(function() return HTS:JSONDecode(txt) end)
+    if okD and type(data) == "table" then
+        applyLoaded(data)
+        clog("Settings loaded.")
+    end
+end
+pcall(loadConfig)
+pcall(armReexec)
+pcall(watchRolls)
+pcall(function()
+    local note = readHopNote()
+    if note and note.job == game.JobId and (os.time() - (tonumber(note.time) or 0)) < 120 then
+        local tries = tonumber(note.tries) or 0
+        if tries >= 1 and tries < 3 then
+            writeHopNote(game.JobId, tries + 1)
+            task.spawn(function()
+                task.wait(5)
+                if Alive then
+                    notify("Server Hop", "Same server, hopping again (" .. (tries + 1) .. "/3)...")
+                    pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+                end
+            end)
+        elseif tries >= 3 then
+            writeHopNote(game.JobId, 0)
+        end
+    end
+end)
+task.spawn(function()
+    while Alive do
+        task.wait(10)
+        if F.saveSettings then pcall(saveNow) end
+    end
+end)
+
+adhShutdown = function()
+    Alive = false
+    pcall(flyStop)
+    pcall(function()
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end)
+    for _, c in ipairs(rollHideConns) do pcall(function() c:Disconnect() end) end
+    table.clear(rollHideConns)
+    for _, c in ipairs({ noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn }) do
+        if c then pcall(function() c:Disconnect() end) end
+    end
+    noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
+end
+
+-- ============ LOOPS ============
+task.spawn(function() while Alive do task.wait(F.collectDelay) if F.collect then pcall(doCollect) end end end)
+task.spawn(function() while Alive do task.wait(F.levelDelay) if F.levelup then pcall(doLevelUp) end end end)
+task.spawn(function() while Alive do task.wait(F.placeDelay) if F.placeBest then pcall(doPlaceBest) end end end)
+task.spawn(function() while Alive do task.wait(F.upgradeDelay) if F.upgrades then pcall(doUpgrades) end end end)
+task.spawn(function() while Alive do task.wait(F.rebirthDelay) if F.rebirth then pcall(doRebirth) end end end)
+task.spawn(function() while Alive do task.wait(F.diceDelay) if F.buyDice or F.equipDice then pcall(doDice) end end end)
+task.spawn(function() while Alive do task.wait(F.potionDelay) if F.potionAuto then pcall(doPotionTick) end end end)
+task.spawn(function() while Alive do task.wait(F.gradeDelay) if F.gradeAuto then pcall(doGradeTick) end end end)
+task.spawn(function() while Alive do task.wait(F.traitDelay) if F.traitAuto then pcall(doTraitTick) end end end)
+task.spawn(function() while Alive do task.wait(3) if F.hideRolls then syncRollHidden() rollHideBackup(true) end end end)
+task.spawn(function() while Alive do task.wait(F.sellDelay) if F.sellAuto then pcall(doInstantSell) end end end)
+task.spawn(function()
+    local last = 0
+    while Alive do
+        task.wait(30)
+        if F.claimQuests then pcall(doClaimQuests) end
+        pcall(statsHookTick)
+        if F.sellSync and F.sellThreshold > 0 and os.clock() - last > 120 then
+            last = os.clock()
+            local s = getSig("SellService", "UpdateAutoSell")
+            if s then pcall(function() s:Fire(F.sellThreshold) end) end
+        end
+    end
+end)
+task.spawn(function()
+    local was = false
+    while Alive do
+        task.wait(0.5)
+        if F.tower and not was then was = true task.spawn(doTowerLoop)
+        elseif not F.tower then was = false end
+    end
+end)
+--[[TRADE-LOOPS-DISABLED (remove this line and the closing line to re-enable)
+task.spawn(function()
+    local wasT = false
+    while Alive do
+        task.wait(0.5)
+        if F.tradeAuto and not wasT then wasT = true task.spawn(doTradeLoop)
+        elseif not F.tradeAuto then wasT = false end
+    end
+end)
+task.spawn(function()
+    while Alive do
+        task.wait(0.5)
+        if F.tradeAutoGo and not tradeDriving and tradeScreenOpen() then
+            task.spawn(driveTrade)
+        end
+    end
+end)
+--TRADE-LOOPS-DISABLED]]
+local lastCollectedTxt = ""
+task.spawn(function()
+    while Alive do
+        task.wait(1)
+        pcall(function()
+            local txt = "Total collected: " .. fmt(Stats.collectedMoney)
+            if txt ~= lastCollectedTxt then
+                lastCollectedTxt = txt
+                pcall(function() collectLine:Set(txt) end)
+            end
+            setStat(towerStat, Stats.towerWins[F.towerName] or 0)
+            setStat(floorStat, Stats.towerFloors)
+            setStat(floorNowStat, lastTowerFloor)
+            setStat(moneyStat, money())
+            setStat(rollStat, rolls())
+            setStat(soldStat, Stats.sold)
+            local pn = 0
+            pcall(function() for _ in pairs(activePotions()) do pn += 1 end end)
+            setStat(potionStat, pn)
+--[[TRADE-STATS-DISABLED
+            setStat(tradeSentStat, Stats.tradesSent or 0)
+            setStat(tradeOpenStat, Stats.tradesOpened or 0)
+--TRADE-STATS-DISABLED]]
+        end)
+    end
+end)
+
+notify("Anime Dice Perfectus Hub", "Loaded. Pick a tab and enable features.")
+log("Hub started.")
