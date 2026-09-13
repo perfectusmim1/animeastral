@@ -91,7 +91,7 @@ task.spawn(function()
     end
     pcall(function()
         if typeof(getgenv) == "function" then getgenv().ADH_Heartbeat = nil end
-    end
+    end)
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
