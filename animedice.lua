@@ -51,11 +51,17 @@ do
 end
 
 local window = Rayfield:CreateWindow({
-    name = "Anime Dice",
-    subtitle = "v1.0 | Perfectus",
+    name = "Anime Dice Hub",
+    subtitle = "v1.0 | Auto Farm",
     sidebarLayout = true,
-    theme = "default",
-    icon = "rbxassetid://127883209471308",
+    theme = "cobalt",
+    icon = "rbxassetid://100284944801383",
+    configuration = {
+        autoSave = false,
+        autoLoad = false,
+        fileName = "AnimeDiceHub",
+        customFolder = "AnimeDiceHub",
+    },
 })
 
 -- ============ STATE ============
@@ -67,7 +73,7 @@ local F = {
     upgrades = false, upgradeDelay = 2, upgradeCats = {},
     buyDice = false, equipDice = true, diceDelay = 5,
     autoRoll = false,
-    sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0,
+    sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0, smartSell = false,
     tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2,
     potionAuto = false, potionDelay = 5, potionBest = true, potionExtend = false, potions = {},
     gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gemReserve = 0,
@@ -115,6 +121,7 @@ need("PlotConfig", function() return require(RS.Framework.Features.Plot.PlotConf
 need("UnitUtil", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitUtil) end)
 need("UnitController", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.UnitController) end)
 need("Upgrades", function() return require(RS.Framework.Features.Upgrades.Upgrades) end)
+need("TreeStructure", function() return require(RS.Framework.Features.Upgrades.TreeStructure) end)
 need("Rebirths", function() return require(RS.Framework.Features.Rebirth.Rebirths) end)
 need("DiceMod", function() return require(RS.Framework.Features.Rolling.Dice) end)
 need("TowersMod", function() return require(RS.Framework.Features.Towers.Towers) end)
@@ -126,6 +133,7 @@ need("TraitsMod", function() return require(RS.Framework.Features.Traits.Traits)
 need("Mutations", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.Mutations) end)
 need("UIRefs", function() return require(RS.Framework.Features.UI.UIReferences) end)
 need("NF", function() return require(RS.Packages.NumberFormatter) end)
+need("BuffCtrl", function() return require(RS.Framework.Features.Buffs.BuffController) end)
 
 local function plotComm() return G.Network.ClientComm.new(RS.Network, false, "PlotService") end
 local function svcComm(svc) return G.Network.ClientComm.new(RS.Network, false, svc) end
@@ -243,6 +251,50 @@ local function rolls() local ok, v = pcall(function() return G.DC.Rolls() end) r
 local function setStat(h, v)
     v = tonumber(v) or 0
     if h.value ~= v then h:Set(v) end
+end
+local SMART_K = 100000
+local lastSmartT = 0
+local function effectiveLuck()
+    local diceLuck, buff = 1, 1
+    pcall(function()
+        local cur = G.DC.Dice()
+        local all = G.DiceMod.GetAll()
+        if cur and all and all[cur] then diceLuck = tonumber(all[cur].luck) or 1 end
+    end)
+    pcall(function()
+        local b = G.BuffCtrl.GetBuff("Luck")
+        if tonumber(b) and tonumber(b) > 0 then buff = tonumber(b) end
+    end)
+    return math.max(1, diceLuck) * math.max(1, buff)
+end
+local function bestOwnedChance()
+    local best = 0
+    for _, e in pairs(inventory()) do
+        if isUnitEntry(e) then
+            local ch = unitChance(e)
+            if ch > best then best = ch end
+        end
+    end
+    return best
+end
+local function smartSellTick(force)
+    if not F.smartSell then return end
+    if not force and os.clock() - lastSmartT < 60 then return end
+    lastSmartT = os.clock()
+    local L = effectiveLuck()
+    local T = SMART_K * L
+    local best = bestOwnedChance()
+    if best > 0 then T = math.min(T, best / 2) end
+    if T > 0 then
+        local mag = 10 ^ math.max(0, math.floor(math.log10(T) - 1))
+        T = math.floor(T / mag) * mag
+    end
+    if T ~= F.sellThreshold then
+        F.sellThreshold = T
+        pcall(function() if U.sellInput then U.sellInput:Set(fmt(T), true) end end)
+        if F.sellSync and T > 0 then local s = getSig("SellService", "UpdateAutoSell") if s then pcall(function() s:Fire(T) end) end end
+        clog("Smart sell: keep 1 in " .. fmt(T) .. "+ (luck " .. fmt(L) .. ")")
+    end
 end
 local function waitVerify(fn, timeout)
     timeout = timeout or 3
@@ -842,6 +894,8 @@ U.sellInput = tSell:CreateInput({ name = "Rarity Threshold (e.g. 1t)", value = "
 tSell:CreateButton({ name = "Set Threshold", callback = function()
     applySellInput(U.sellInput and U.sellInput.value or "")
 end })
+U.smartSell = tSell:CreateToggle({ name = "Smart Sell Threshold", value = false,
+    callback = function(v) F.smartSell = v if v then smartSellTick(true) end end })
 U.sellSync = tSell:CreateToggle({ name = "Apply Threshold To Game", value = false,
     callback = function(v)
         F.sellSync = v
@@ -1085,6 +1139,7 @@ tChanges:CreateText({
 <font color="#4ade80">•</font> Auto Claim Quests with one-click button
 <font color="#4ade80">•</font> Discord webhooks for rolls and stats with game images
 <font color="#4ade80">•</font> Settings save per player and restore on next run
+<font color="#4ade80">•</font> Rayfield config profiles, apply them on other accounts
 <font color="#4ade80">•</font> Server tools: Rejoin, Server Hop, Low-Player Hop
 <font color="#4ade80">•</font> Character: WalkSpeed, Fly, Noclip, Anti-AFK, FPS Boost
 <font color="#4ade80">•</font> Auto Execute on teleport with your own loadstring]]
@@ -1114,6 +1169,50 @@ U.saveSettings = tSettings:CreateToggle({ name = "Auto Save Settings", value = t
         F.saveSettings = v
         if v then pcall(saveNow) end
     end })
+tSettings:CreateDivider({ text = "Rayfield Configs" })
+local cfgDrop
+local cfgSelName = ""
+local cfgNameInput = tSettings:CreateInput({ name = "Config Name", value = "", placeholder = "e.g. main-farm",
+    callback = function() end })
+local function refreshCfgList()
+    if not cfgDrop then return end
+    local list = {}
+    pcall(function() list = window:ListConfigs() or {} end)
+    if type(list) ~= "table" then list = {} end
+    table.sort(list)
+    pcall(function() cfgDrop:Refresh(list) end)
+end
+cfgDrop = tSettings:CreateDropdown({ name = "Saved Configs", options = {},
+    callback = function(sel)
+        cfgSelName = (type(sel) == "table") and (sel[1] or "") or (sel or "")
+    end })
+tSettings:CreateButton({ name = "Save New Config", callback = function()
+    local nm = cfgNameInput and cfgNameInput.value or ""
+    nm = nm:gsub("^%s+", ""):gsub("%s+$", "")
+    if nm == "" then notify("Config", "Enter a name first.") return end
+    local ok = pcall(function() window:Save(nm) end)
+    notify("Config", ok and ("Saved: " .. nm) or "Save failed.")
+    refreshCfgList()
+end })
+tSettings:CreateButton({ name = "Load Selected", callback = function()
+    if cfgSelName == "" then notify("Config", "Select a config first.") return end
+    local ok = pcall(function() window:Load(cfgSelName) end)
+    notify("Config", ok and ("Loaded: " .. cfgSelName) or "Load failed.")
+end })
+tSettings:CreateButton({ name = "Overwrite Selected", callback = function()
+    if cfgSelName == "" then notify("Config", "Select a config first.") return end
+    local ok = pcall(function() window:Save(cfgSelName) end)
+    notify("Config", ok and ("Overwritten: " .. cfgSelName) or "Save failed.")
+end })
+tSettings:CreateButton({ name = "Delete Selected", callback = function()
+    if cfgSelName == "" then notify("Config", "Select a config first.") return end
+    pcall(function() window:DeleteConfig(cfgSelName) end)
+    cfgSelName = ""
+    refreshCfgList()
+    notify("Config", "Deleted.")
+end })
+tSettings:CreateButton({ name = "Refresh Config List", callback = function() refreshCfgList() end })
+refreshCfgList()
 tSettings:CreateDivider({ text = "Server" })
 tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
 tSettings:CreateButton({ name = "Server Hop", callback = function() doHop(false) end })
@@ -1304,33 +1403,66 @@ local function catOf(name)
     end
     return nil
 end
+local badUpg = {}
+local lastUpgFailLog = 0
 local function doUpgrades()
     local sig = buyUpgradeSig()
-    if not sig then return end
+    if not sig or not G.Upgrades or not G.TreeStructure then return end
     local owned = {}
     pcall(function() owned = G.DC.Upgrades() or {} end)
-    local list = {}
-    for name, data in pairs(G.Upgrades) do
-        if type(data) == "table" and data.price and not owned[name] and name ~= "Start" then
-            if #F.upgradeCats == 0 then
-                table.insert(list, { name = name, price = data.price })
-            else
-                local c = catOf(name)
-                for _, want in ipairs(F.upgradeCats) do
-                    if c == want then table.insert(list, { name = name, price = data.price }) break end
-                end
+    local seen, list = {}, {}
+    local function kidsOf(p)
+        local ok, r = pcall(function() return G.TreeStructure.GetChildren(p) end)
+        if ok and type(r) == "table" then return r end
+        return {}
+    end
+    local function consider(name)
+        if type(name) ~= "string" or owned[name] or seen[name] then return end
+        seen[name] = true
+        local d = G.Upgrades[name]
+        if type(d) == "table" and d.price then
+            table.insert(list, { name = name, price = d.price })
+        end
+    end
+    for _, n in ipairs(kidsOf("Start")) do consider(n) end
+    consider("Start")
+    for name in pairs(owned) do
+        for _, n in ipairs(kidsOf(name)) do consider(n) end
+    end
+    local flt = {}
+    for _, u in ipairs(list) do
+        if #F.upgradeCats == 0 then
+            table.insert(flt, u)
+        else
+            local c = catOf(u.name)
+            for _, want in ipairs(F.upgradeCats) do
+                if c == want then table.insert(flt, u) break end
             end
         end
     end
-    table.sort(list, function(a, b) return a.price < b.price end)
+    table.sort(flt, function(a, b) return a.price < b.price end)
     local m = money()
-    for _, u in ipairs(list) do
+    for _, u in ipairs(flt) do
         if m >= u.price then
-            local ok = pcall(function() sig:Fire(u.name) end)
-            if ok then Stats.upgraded += 1 clog("Upgrade: " .. u.name) end
-            break -- one per cycle (anti-spam)
+            if (badUpg[u.name] or 0) > os.clock() then continue end
+            pcall(function() sig:Fire(u.name) end)
+            task.wait(0.8)
+            local got = false
+            pcall(function() got = G.DC.Upgrades[u.name]() == true end)
+            if got then
+                badUpg[u.name] = nil
+                Stats.upgraded += 1
+                clog("Upgrade: " .. u.name)
+            else
+                badUpg[u.name] = os.clock() + 60
+                if os.clock() - lastUpgFailLog > 10 then
+                    lastUpgFailLog = os.clock()
+                    clog("Upgrade rejected by server: " .. u.name)
+                end
+            end
+            break
         else
-            break -- cheapest still too expensive
+            break
         end
     end
 end
@@ -2087,6 +2219,7 @@ task.spawn(function()
     while Alive do
         task.wait(30)
         if F.claimQuests then pcall(doClaimQuests) end
+        if F.smartSell then pcall(smartSellTick) end
         pcall(statsHookTick)
         if F.sellSync and F.sellThreshold > 0 and os.clock() - last > 120 then
             last = os.clock()
