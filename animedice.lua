@@ -51,8 +51,8 @@ do
 end
 
 local window = Rayfield:CreateWindow({
-    name = "Anime Dice Hub",
-    subtitle = "v1.1 | Auto Farm",
+    name = "Anime Dice",
+    subtitle = "v1.1 | Perfectus,
     sidebarLayout = true,
     theme = "cobalt",
     icon = "rbxassetid://100284944801383",
@@ -335,7 +335,10 @@ local function smartLevelTick(force)
             end
             return c
         end
-        local cap = math.clamp(math.floor(tonumber(F.maxLevel) or 40), 1, 99)
+        local minLvl = 99
+        for _, u in ipairs(units) do minLvl = math.min(minLvl, u.lvl) end
+        -- ponytail: start from reality (min unit lvl), not stale slider, or cost is 0 and cap never moves
+        local cap = math.clamp(minLvl, 1, 99)
         local guard, moved = 0, true
         while moved and guard < 25 do
             moved = false guard += 1
