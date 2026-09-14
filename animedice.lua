@@ -1253,7 +1253,7 @@ U.gradePlacedOnly = tReroll:CreateToggle({ name = "Grade: Placed Units Only", de
     end })
 U.gradeDelay = tReroll:CreateSlider({ name = "Grade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.gradeDelay = v end })
-U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", value = "", numeric = true, placeholder = "e.g. 100",
+U.gemReserve = tReroll:CreateInput({ name = "Grade: Gems Reserve", value = "", numeric = true, placeholder = "e.g. 100",
     callback = function(t) F.gemReserve = math.floor(tonumber(t) or 0) end })
 tReroll:CreateDivider({ text = "Auto Trait" })
 U.traitAuto = tReroll:CreateToggle({ name = "Auto Trait", value = false,
@@ -1292,7 +1292,7 @@ U.traitPlacedOnly = tReroll:CreateToggle({ name = "Trait: Placed Units Only", de
     end })
 U.traitDelay = tReroll:CreateSlider({ name = "Trait Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.traitDelay = v end })
-U.rerollReserve = tReroll:CreateInput({ name = "Traits: Stop If Rerolls Reach", value = "", numeric = true, placeholder = "e.g. 50",
+U.rerollReserve = tReroll:CreateInput({ name = "Trait: Trait Reroll Reserve", value = "", numeric = true, placeholder = "e.g. 50",
     callback = function(t) F.rerollReserve = math.floor(tonumber(t) or 0) end })
 
 -- ---- Trade ----
