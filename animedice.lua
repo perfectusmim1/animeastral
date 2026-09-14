@@ -82,12 +82,14 @@ local F = {
     rollHookUrl = "", rollHookOn = false, rollHookMin = 0,
     statHookUrl = "", statHookOn = false,
     claimQuests = false, hideRolls = false,
+    codesAuto = false, codesDelay = 300,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
     tradeHookUrl = "", tradeHookOn = false,
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 9
+local BUILD = 10
+local DEFAULT_CODES = { "UPDATE1", "UPDATE2", "UPDATE3", "1KCCU", "5KCCU", "10KCCU", "20KCCU", "UPDATE4" }
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -104,7 +106,7 @@ task.spawn(function()
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
-local doInstantSell, doPotionTick, showPotions, doClaimQuests, doGradeTick, doTraitTick -- forward declarations (defined below)
+local doInstantSell, doPotionTick, showPotions, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
@@ -130,6 +132,7 @@ need("Rebirths", function() return require(RS.Framework.Features.Rebirth.Rebirth
 need("DiceMod", function() return require(RS.Framework.Features.Rolling.Dice) end)
 need("TowersMod", function() return require(RS.Framework.Features.Towers.Towers) end)
 need("BoostConfig", function() return require(RS.Framework.Features.Inventory.Kinds.Boost.BoostConfig) end)
+need("MonetConfig", function() return require(RS.Framework.Features.Monetization.MonetizationConfig) end)
 need("QuestConfig", function() return require(RS.Framework.Features.Quests.QuestConfig) end)
 need("TradeConfig", function() return require(RS.Framework.Features.Trading.TradeConfig) end)
 need("GradesMod", function() return require(RS.Framework.Features.Grades.Grades) end)
@@ -1011,6 +1014,16 @@ U.claimQuests = tMain:CreateToggle({ name = "Auto Claim Quests", value = false,
     callback = function(v) F.claimQuests = v end })
 tMain:CreateButton({ name = "Claim Quests Now", callback = function() task.spawn(doClaimQuests) end })
 
+tMain:CreateDivider({ text = "Codes" })
+U.codesAuto = tMain:CreateToggle({ name = "Auto Redeem Codes", value = false,
+    callback = function(v)
+        F.codesAuto = v
+        if v then task.spawn(function() pcall(doRedeemCodes) end) end
+    end })
+U.codesDelay = tMain:CreateSlider({ name = "Redeem Retry", range = { 60, 1800 }, increment = 60, value = 300, suffix = "s",
+    callback = function(v) F.codesDelay = math.floor(v) end })
+tMain:CreateButton({ name = "Redeem All Codes Now", callback = function() task.spawn(function() pcall(doRedeemCodes, true) end) end })
+
 -- ---- Units ----
 tUnits:CreateDivider({ text = "Levels (Level Up)" })
 U.levelup = tUnits:CreateToggle({ name = "Auto Level Up", value = false,
@@ -1334,6 +1347,13 @@ tStats:CreateButton({ name = "Copy Log", callback = function()
     local ok = pcall(function() setclipboard(table.concat(LogLines, "\n")) end)
     notify("Log", ok and (#LogLines .. " lines copied.") or "Copy failed.")
 end })
+
+tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.4 - Auto Redeem Codes</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> Main tab: Auto Redeem Codes - code list auto-detected from the game itself (RELEASE, UPDATE1-4, 1K-40K CCU + future codes) + Redeem All Codes Now
+<font color="#4ade80">•</font> Skips already-redeemed codes, retries on an interval for future codes]]
+})
 
 tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.3 - Smart Tower & Trade reliability</font></b>',
@@ -2334,6 +2354,53 @@ local function doTraitTick(manual)
     Busy.trait = false
 end
 
+doRedeemCodes = function(manual)
+    local sig = getSig("MonetizationService", "RedeemCode")
+    if not sig then if manual then notify("Codes", "Redeem remote missing.") end return end
+    local redeemed = {}
+    pcall(function()
+        local r = G.DC.RedeemedCodes()
+        if type(r) == "table" then
+            for k, v in pairs(r) do
+                if v == true then redeemed[k] = true else redeemed[v] = true end
+            end
+        end
+    end)
+    local seen, queue = {}, {}
+    -- auto-detect: the game ships its full code list in MonetizationConfig.Codes,
+    -- so future codes (UPDATE5, ...) work without a script update
+    local detected = {}
+    pcall(function()
+        local cfg = G.MonetConfig and G.MonetConfig.Codes
+        if type(cfg) == "table" then
+            for code in pairs(cfg) do
+                if type(code) == "string" and code ~= "" then table.insert(detected, code) end
+            end
+        end
+    end)
+    table.sort(detected)
+    for _, c in ipairs(detected) do
+        if not seen[c] and not redeemed[c] then seen[c] = true table.insert(queue, c) end
+    end
+    for _, c in ipairs(DEFAULT_CODES) do
+        if c ~= "" and not seen[c] and not redeemed[c] then seen[c] = true table.insert(queue, c) end
+    end
+    if #queue == 0 then if manual then notify("Codes", "All codes already redeemed.") end return end
+    local okCount = 0
+    for _, code in ipairs(queue) do
+        if not Alive then break end
+        pcall(function() sig:Fire(code) end)
+        task.wait(0.6)
+        local got = false
+        pcall(function()
+            local r = G.DC.RedeemedCodes()
+            if type(r) == "table" then got = r[code] == true end
+        end)
+        if got then okCount += 1 clog("Code redeemed: " .. code) end
+    end
+    notify("Codes", "Done: " .. okCount .. "/" .. #queue .. " new redeemed.")
+end
+
 doClaimQuests = function()
     local sig = getSig("QuestService", "Claim")
     if not sig or not G.QuestConfig then return end
@@ -2807,6 +2874,14 @@ task.spawn(function() while Alive do task.wait(F.gradeDelay) if F.gradeAuto then
 task.spawn(function() while Alive do task.wait(F.traitDelay) if F.traitAuto then pcall(doTraitTick) end end end)
 task.spawn(function() while Alive do task.wait(3) if F.hideRolls then syncRollHidden() rollHideBackup(true) end end end)
 task.spawn(function() while Alive do task.wait(F.sellDelay) if F.sellAuto then pcall(doInstantSell) end end end)
+task.spawn(function()
+    task.wait(8)
+    if F.codesAuto and Alive then pcall(doRedeemCodes) end
+    while Alive do
+        task.wait(math.max(60, tonumber(F.codesDelay) or 300))
+        if F.codesAuto then pcall(doRedeemCodes) end
+    end
+end)
 task.spawn(function()
     local last = 0
     while Alive do
