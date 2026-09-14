@@ -2015,16 +2015,39 @@ local function smartTowerPick()
     end)
     if #cands == 0 then return F.towerName, nil end
     local cap = (smartCapOrder and os.clock() < smartCapUntil) and smartCapOrder or nil
-    local best, bestScore, bestReach = nil, -1, 0
+    local best, bestScore, bestReach, bestOrd = nil, -1, 0, -1
+    local detail = {}
     for _, c in ipairs(cands) do
         local ord = 99
         pcall(function() ord = c.ref.order or 99 end)
-        if not (cap and ord > cap) then
+        if cap and ord > cap then
+            table.insert(detail, c.name .. "=capped")
+        else
             local reach, score = simTower(c.ref, members)
-            if score > bestScore then best, bestScore, bestReach = c.name, score, reach end
+            if (Stats.towerWins[c.name] or 0) > 0 then
+                -- ground truth beats sim: already cleared it this session, trust full clear
+                local maxF = 100
+                pcall(function() maxF = c.ref.maxFloors or 100 end)
+                if reach < maxF then
+                    reach = maxF
+                    local ti = 0
+                    pcall(function()
+                        for _, t in ipairs(c.ref.drops or {}) do
+                            if tonumber(t.minFloor) and tonumber(t.minFloor) <= maxF then ti += 1 end
+                        end
+                    end)
+                    score = ord * 100 * maxF + ti * 10
+                end
+            end
+            table.insert(detail, c.name .. " f" .. tostring(reach))
+            if score > bestScore or (score == bestScore and ord > bestOrd) then
+                best, bestScore, bestReach, bestOrd = c.name, score, reach, ord
+            end
         end
     end
-    return best or F.towerName, best and { reach = bestReach, score = bestScore } or nil
+    table.sort(detail)
+    local info = best and { reach = bestReach, score = bestScore, detail = table.concat(detail, ", ") } or nil
+    return best or F.towerName, info
 end
 local function syncTowerDropdown()
     pcall(function()
@@ -2038,9 +2061,9 @@ instantSmartCheck = function()
     local pick, info = smartTowerPick()
     if pick and pick ~= F.towerName then
         F.towerName = pick
-        clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. ")") or ""))
+        clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. (info.detail and (" [" .. info.detail .. "]") or "")) .. ")" or ""))
     elseif pick then
-        clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. ")") or "") .. " - already best")
+        clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. (info.detail and (" [" .. info.detail .. "]") or "")) .. ")" or "") .. " - already best")
     else
         clog("Smart tower: no team found, keeping " .. tostring(F.towerName))
     end
@@ -2062,9 +2085,9 @@ local function doTowerLoop()
             local pick, info = smartTowerPick()
             if pick and pick ~= F.towerName then
                 F.towerName = pick
-                clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. ")") or ""))
+                clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. (info.detail and (" [" .. info.detail .. "]") or "")) .. ")" or ""))
             elseif pick then
-                clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. ")") or "") .. " - already best")
+                clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. (info.detail and (" [" .. info.detail .. "]") or "")) .. ")" or "") .. " - already best")
             else
                 clog("Smart tower: no team found, keeping " .. tostring(F.towerName))
             end
