@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice",
-    subtitle = "v1.2 | Perfectus",
+    subtitle = "v1.3 | Perfectus",
     sidebarLayout = true,
     theme = "default",
     icon = "rbxassetid://100284944801383",
@@ -86,6 +86,8 @@ local F = {
     tradeHookUrl = "", tradeHookOn = false,
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
+-- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
+local BUILD = 9
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -103,6 +105,7 @@ end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
 local doInstantSell, doPotionTick, showPotions, doClaimQuests, doGradeTick, doTraitTick -- forward declarations (defined below)
+local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
 local G = { ok = false, missing = {} }
@@ -757,68 +760,54 @@ local function buildTraitOptions()
     end
     return out
 end
-local function ownedUnitNames()
-    local counts, seen = {}, {}
-    local function add(key, e)
-        if seen[key] or not isUnitEntry(e) then return end
-        seen[key] = true
-        counts[e.name] = (counts[e.name] or 0) + 1
-    end
-    for key, e in pairs(inventory()) do add(key, e) end
-    -- placed units may be absent from the inventory snapshot: resolve via slot ids
+local function placedUnitKeys()
+    local set = {}
     pcall(function()
         for _, d in pairs(slots()) do
-            if type(d) == "table" and d.unitId then add(d.unitId, invEntry(d.unitId)) end
+            if type(d) == "table" and d.unitId then set[d.unitId] = true end
         end
     end)
-    return counts
+    return set
 end
-local function unitExtraByName(kind)
-    local extra = {}
-    local function add(e)
-        if not isUnitEntry(e) then return end
-        local v = e.attributes and (kind == "grade" and e.attributes.grade or e.attributes.trait)
-        if v ~= nil and v ~= "" then
-            extra[e.name] = extra[e.name] or {}
-            extra[e.name][tostring(v)] = true
-        end
-    end
-    for _, e in pairs(inventory()) do add(e) end
-    -- same: also read grade/trait off slot-placed units
-    pcall(function()
-        for _, d in pairs(slots()) do
-            if type(d) == "table" and d.unitId then add(invEntry(d.unitId)) end
-        end
-    end)
-    return extra
-end
-local function buildUnitOptions(counts, map, kind)
+-- One row per unit COPY (not per name): label shows that copy's own grade/trait.
+-- map: label -> inventory key. Selection (F.gradeUnits / F.traitUnits) stores keys.
+local function buildUnitOptions(map, kind)
     local labels = {}
     for k in pairs(map) do map[k] = nil end
-    local extra = (kind == "grade" or kind == "trait") and unitExtraByName(kind) or nil
-    for name, c in pairs(counts) do
-        local suffix = ""
-        if extra and extra[name] then
-            local list = {}
-            for v in pairs(extra[name]) do table.insert(list, v) end
-            table.sort(list)
-            suffix = " [" .. table.concat(list, ", ") .. "]"
+    local placed = placedUnitKeys()
+    local seen = {}
+    local function add(key)
+        if seen[key] then return end
+        local e = invEntry(key)
+        if not isUnitEntry(e) then return end
+        seen[key] = true
+        local tag = "-"
+        if kind == "grade" or kind == "trait" then
+            local v = e.attributes and (kind == "grade" and e.attributes.grade or e.attributes.trait)
+            if v ~= nil and v ~= "" then tag = tostring(v) end
         end
-        local lbl = name .. " (" .. c .. ")" .. suffix
-        map[lbl] = name
+        local lbl = e.name .. " [" .. tag .. "]" .. (placed[key] and " ★" or "")
+        local base, n = lbl, 2
+        while map[lbl] do lbl = base .. " #" .. n n += 1 end
+        map[lbl] = key
         table.insert(labels, lbl)
     end
+    for key in pairs(inventory()) do add(key) end
+    -- placed units may be absent from the inventory snapshot: resolve via slot ids
+    for key in pairs(placed) do add(key) end
     table.sort(labels)
     return labels
 end
-local function refreshUnitDrop(drop, map, keepNames, kind)
-    if not drop then return end
+local function refreshUnitDrop(drop, map, keepKeys, kind)
+    if not drop then return 0 end
     local keep = {}
-    for _, n in ipairs(keepNames) do keep[n] = true end
-    drop:Refresh(buildUnitOptions(ownedUnitNames(), map, kind))
+    for _, k in ipairs(keepKeys) do keep[k] = true end
+    local labels = buildUnitOptions(map, kind)
+    drop:Refresh(labels)
     local resel = {}
-    for lbl, n in pairs(map) do if keep[n] then table.insert(resel, lbl) end end
+    for lbl, k in pairs(map) do if keep[k] then table.insert(resel, lbl) end end
     if #resel > 0 then drop:Set(resel) end
+    return #labels
 end
 local function currencyAmount(name)
     local total = 0
@@ -1224,13 +1213,14 @@ U.gradeTargets = tReroll:CreateDropdown({ name = "Target Grades", multiSelect = 
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeByLabel[lbl] if n then table.insert(F.gradeTargets, n) end end end
     end })
 U.gradeUnits = tReroll:CreateDropdown({ name = "Grade Units", multiSelect = true,
-    options = buildUnitOptions(ownedUnitNames(), gradeUnitByLabel, "grade"), value = {},
+    options = buildUnitOptions(gradeUnitByLabel, "grade"), value = {},
     callback = function(sel)
         F.gradeUnits = {}
-        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeUnitByLabel[lbl] if n then table.insert(F.gradeUnits, n) end end end
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local k = gradeUnitByLabel[lbl] if k then table.insert(F.gradeUnits, k) end end end
     end })
 tReroll:CreateButton({ name = "Refresh Grade Units", callback = function()
-    refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade")
+    local n = refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") or 0
+    notify("Grade", n .. " units listed.")
 end })
 U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", value = false,
     callback = function(v)
@@ -1240,7 +1230,7 @@ U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", value = false,
             if U.gradePlacedOnly then pcall(function() U.gradePlacedOnly:Set(false, true) end) end
         end
     end })
-U.gradePlacedOnly = tReroll:CreateToggle({ name = "Grade: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
+U.gradePlacedOnly = tReroll:CreateToggle({ name = "Grade: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units.", value = false,
     callback = function(v)
         F.gradePlacedOnly = v
         if v and F.gradeAll then
@@ -1262,13 +1252,14 @@ U.traitTargets = tReroll:CreateDropdown({ name = "Target Traits", multiSelect = 
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitByLabel[lbl] if n then table.insert(F.traitTargets, n) end end end
     end })
 U.traitUnits = tReroll:CreateDropdown({ name = "Trait Units", multiSelect = true,
-    options = buildUnitOptions(ownedUnitNames(), traitUnitByLabel, "trait"), value = {},
+    options = buildUnitOptions(traitUnitByLabel, "trait"), value = {},
     callback = function(sel)
         F.traitUnits = {}
-        if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitUnitByLabel[lbl] if n then table.insert(F.traitUnits, n) end end end
+        if type(sel) == "table" then for _, lbl in ipairs(sel) do local k = traitUnitByLabel[lbl] if k then table.insert(F.traitUnits, k) end end end
     end })
 tReroll:CreateButton({ name = "Refresh Trait Units", callback = function()
-    refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait")
+    local n = refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") or 0
+    notify("Trait", n .. " units listed.")
 end })
 U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", value = false,
     callback = function(v)
@@ -1278,7 +1269,7 @@ U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", value = false,
             if U.traitPlacedOnly then pcall(function() U.traitPlacedOnly:Set(false, true) end) end
         end
     end })
-U.traitPlacedOnly = tReroll:CreateToggle({ name = "Trait: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
+U.traitPlacedOnly = tReroll:CreateToggle({ name = "Trait: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units.", value = false,
     callback = function(v)
         F.traitPlacedOnly = v
         if v and F.traitAll then
@@ -1330,7 +1321,31 @@ local rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rb
 local soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
 local potionStat = tStats:CreateStat({ name = "Active Potions", value = 0, icon = "rbxassetid://92709571106091", changeMode = "absolute" })
 local console = tStats:CreateConsole({ name = "Log", height = 160, follow = true, maxLines = 120 })
-local function clog(m) pcall(function() console:Append(m) end) end
+local LogLines, LOG_KEEP = {}, 200
+clog = function(m)
+    pcall(function()
+        table.insert(LogLines, tostring(m))
+        if #LogLines > LOG_KEEP then table.remove(LogLines, 1) end
+    end)
+    pcall(function() console:Append(m) end)
+end
+tStats:CreateButton({ name = "Copy Log", callback = function()
+    if typeof(setclipboard) ~= "function" then notify("Log", "setclipboard not supported.") return end
+    local ok = pcall(function() setclipboard(table.concat(LogLines, "\n")) end)
+    notify("Log", ok and (#LogLines .. " lines copied.") or "Copy failed.")
+end })
+
+tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.3 - Smart Tower & Trade reliability</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> Smart Tower uses real buffed stats (upgrades + active potions), trusts session wins, logs full sim breakdown
+<font color="#4ade80">•</font> Grade/Trait: Placed Units Only mode (ignores name filter, mutually exclusive with All Units)
+<font color="#4ade80">•</font> Unit dropdowns auto-refresh after every roll + on warmup, with refresh confirmation
+<font color="#4ade80">•</font> Trade counting/webhook fixed (game sends Ended+reason) and works for manual trades too
+<font color="#4ade80">•</font> Trade timeout: accepted trades get 45s, then auto-cancel and move on
+<font color="#4ade80">•</font> Trade never sends requests or hops while you are in a trade
+<font color="#4ade80">•</font> Grade/Trait unit lists show every copy separately with its own grade/trait (placed marked ★) - pick exact units, no more merged D+S rows]]
+})
 
 tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.2 - Trade & Smart Tower</font></b>',
@@ -2211,15 +2226,6 @@ local function doTowerLoop()
 end
 
 local gradeSkipLogged = {}
-local function placedUnitKeys()
-    local set = {}
-    pcall(function()
-        for _, d in pairs(slots()) do
-            if type(d) == "table" and d.unitId then set[d.unitId] = true end
-        end
-    end)
-    return set
-end
 local function targetAbove(mod, cur, set)
     if not mod then return false end
     local co = 0
@@ -2243,11 +2249,11 @@ local function doGradeTick(manual)
         local targets = {}
         for _, n in ipairs(F.gradeTargets) do targets[n] = true end
         local sel = {}
-        if not F.gradeAll then for _, n in ipairs(F.gradeUnits) do sel[n] = true end end
+        if not F.gradeAll then for _, k in ipairs(F.gradeUnits) do sel[k] = true end end
         local placed = F.gradePlacedOnly and placedUnitKeys() or nil
         for key, e in pairs(inventory()) do
             if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
-                if F.gradeAll or F.gradePlacedOnly or sel[e.name] then
+                if F.gradeAll or F.gradePlacedOnly or sel[key] then
                     local g = e.attributes and e.attributes.grade
                     if not g or not targets[g] then
                         local gd = g and G.GradesMod[g]
@@ -2292,11 +2298,11 @@ local function doTraitTick(manual)
         local targets = {}
         for _, n in ipairs(F.traitTargets) do targets[n] = true end
         local sel = {}
-        if not F.traitAll then for _, n in ipairs(F.traitUnits) do sel[n] = true end end
+        if not F.traitAll then for _, k in ipairs(F.traitUnits) do sel[k] = true end end
         local placed = F.traitPlacedOnly and placedUnitKeys() or nil
         for key, e in pairs(inventory()) do
             if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
-                if F.traitAll or F.traitPlacedOnly or sel[e.name] then
+                if F.traitAll or F.traitPlacedOnly or sel[key] then
                     local t = e.attributes and e.attributes.trait
                     if not t or not targets[t] then
                         local td = t and G.TraitsMod[t]
@@ -2704,11 +2710,15 @@ local function applyLoaded(data)
                 pcall(function() h:Set(back, true) end)
             elseif k == "gradeUnits" or k == "traitUnits" then
                 local map = (k == "gradeUnits") and gradeUnitByLabel or traitUnitByLabel
-                buildUnitOptions(ownedUnitNames(), map, (k == "gradeUnits") and "grade" or "trait")
-                local keep = {}
-                for _, n in ipairs(F[k]) do keep[n] = true end
-                local back = {}
-                for lbl, n in pairs(map) do if keep[n] then table.insert(back, lbl) end end
+                -- selection stores inventory keys now; drop stale keys, reselect live ones
+                local live = {}
+                buildUnitOptions(map, (k == "gradeUnits") and "grade" or "trait")
+                for lbl, key in pairs(map) do live[key] = lbl end
+                local clean, back = {}, {}
+                for _, key in ipairs(F[k]) do
+                    if live[key] then table.insert(clean, key) table.insert(back, live[key]) end
+                end
+                F[k] = clean
                 pcall(function() h:Set(back, true) end)
             elseif F[k] ~= nil and type(F[k]) ~= "table" then
                 pcall(function() h:Set(F[k], true) end)
@@ -2753,6 +2763,11 @@ pcall(watchRolls)
 -- inventory data can arrive after script start: rebuild unit dropdowns once warm
 task.spawn(function()
     task.wait(6)
+    if not Alive then return end
+    local g = pcall(function() return refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end)
+    local t = pcall(function() return refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end)
+    if g or t then notify("Reroll", "Unit lists refreshed.") end
+    task.wait(25)
     if not Alive then return end
     pcall(function() refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end)
     pcall(function() refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end)
@@ -2856,5 +2871,5 @@ task.spawn(function()
     end
 end)
 
-notify("Anime Dice Perfectus Hub", "Loaded. Pick a tab and enable features.")
+notify("Anime Dice Perfectus Hub", "Loaded (build " .. tostring(BUILD) .. "). Pick a tab and enable features.")
 log("Hub started.")
