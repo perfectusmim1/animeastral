@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice",
-    subtitle = "v1.1 | Perfectus,
+    subtitle = "v1.1 | Perfectus",
     sidebarLayout = true,
     theme = "cobalt",
     icon = "rbxassetid://100284944801383",
