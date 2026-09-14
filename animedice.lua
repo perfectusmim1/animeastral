@@ -2331,6 +2331,7 @@ local function tradePlayer(plr)
     return false
 end
 local tradeTried = {}
+local tradeNoMinWarned = false
 local function doTradeLoop()
     if Busy.trade then return end
     Busy.trade = true
@@ -2343,6 +2344,16 @@ local function doTradeLoop()
     tradeEnsureListener()
     if AUTOEXEC_CODE:find("PASTE_YOUR") then clog("Trade: set AUTOEXEC_CODE or hopping strands you.") end
     while F.tradeAuto and Alive do
+        if (tonumber(F.tradeMoney) or 0) <= 0 then
+            if not tradeNoMinWarned then
+                tradeNoMinWarned = true
+                clog("Trade: set Min Money first (idle, no hopping).")
+                notify("Trade", "Set Min Money first.")
+            end
+            task.wait(5)
+            continue
+        end
+        tradeNoMinWarned = false
         local cands = {}
         for _, c in ipairs(tradeTargets()) do
             if not tradeTried[c.p.UserId] then table.insert(cands, c) end
