@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice",
-    subtitle = "v1.1 | Perfectus",
+    subtitle = "v1.2 | Perfectus",
     sidebarLayout = true,
     theme = "cobalt",
     icon = "rbxassetid://100284944801383",
@@ -83,6 +83,7 @@ local F = {
     statHookUrl = "", statHookOn = false,
     claimQuests = false, hideRolls = false,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
+    tradeHookUrl = "", tradeHookOn = false,
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 local Alive = true
@@ -606,7 +607,7 @@ end
 local lastHopAt = 0
 local function doHop(lowPop)
     task.spawn(function()
-        if os.clock() - lastHopAt < 60 then
+        if os.clock() - lastHopAt < 30 then
             notify("Server Hop", "Cooldown, skipping.")
             return
         end
@@ -1266,6 +1267,11 @@ U.tradeNeedOffer = tTrade:CreateToggle({ name = "Require Partner Offer", value =
     callback = function(v) F.tradeNeedOffer = v end })
 U.tradeMinItems = tTrade:CreateSlider({ name = "Min Partner Items", range = { 0, 10 }, increment = 1, value = 1,
     callback = function(v) F.tradeMinItems = math.floor(v) end })
+tTrade:CreateDivider({ text = "Trade Webhook" })
+U.tradeHookUrl = tTrade:CreateInput({ name = "Trade Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
+    callback = function(t) F.tradeHookUrl = t end })
+U.tradeHookOn = tTrade:CreateToggle({ name = "Trade Alerts", value = false,
+    callback = function(v) F.tradeHookOn = v end })
 tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
     F.tradeAuto = false
     if U.tradeAuto then pcall(function() U.tradeAuto:Set(false, true) end) end
@@ -1282,6 +1288,16 @@ local soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxasseti
 local potionStat = tStats:CreateStat({ name = "Active Potions", value = 0, icon = "rbxassetid://92709571106091", changeMode = "absolute" })
 local console = tStats:CreateConsole({ name = "Log", height = 160, follow = true, maxLines = 120 })
 local function clog(m) pcall(function() console:Append(m) end) end
+
+tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.2 - Trade & Smart Tower</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> Trade webhook: completed trades post partner, what you gave and what you got
+<font color="#4ade80">•</font> Trade stays idle until Min Money is set - no more "nobody matches" hop spam
+<font color="#4ade80">•</font> Server Hop reworked: no 3-try give-up, 30s cooldown instead of hop storms
+<font color="#4ade80">•</font> Smart Tower checks instantly on toggle and reports every run (already best or new pick)
+<font color="#4ade80">•</font> All UI text English]]
+})
 
 tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.1 - Speed & Performance</font></b>',
@@ -2205,6 +2221,7 @@ end
 
 -- ---- Auto Trade engine ----
 local tradeEvt = { name = "", time = 0, data = nil }
+local lastTradeOffers = { own = nil, other = nil }
 local tradeEvtConnected = false
 local function tradeEnsureListener()
     if tradeEvtConnected then return end
@@ -2213,6 +2230,12 @@ local function tradeEnsureListener()
     local ok = pcall(function()
         tradeListenerConn = s:Connect(function(ev, a)
             tradeEvt = { name = tostring(ev), time = os.clock(), data = a }
+            pcall(function()
+                if type(a) == "table" then
+                    if a.otherOffer ~= nil then lastTradeOffers.other = a.otherOffer end
+                    if a.ownOffer ~= nil then lastTradeOffers.own = a.ownOffer end
+                end
+            end)
         end)
     end)
     if ok then tradeEvtConnected = true end
@@ -2302,6 +2325,49 @@ local function driveTrade()
 end
 local tradeActive = false
 local lastTradeEnd = 0
+local function fmtOffer(off)
+    if type(off) ~= "table" then return "(empty)" end
+    local parts = {}
+    for k, v in pairs(off) do
+        local name, extra = tostring(k), ""
+        pcall(function()
+            local e = invEntry(k) or (type(v) == "string" and invEntry(v))
+            if e and type(e) == "table" and e.name then
+                name = tostring(e.name)
+                local ch = unitChance(e)
+                if ch > 0 then
+                    extra = " [1 in " .. fmt(ch) .. "]"
+                elseif tonumber(e.amount) then
+                    extra = " x" .. tostring(e.amount)
+                end
+            elseif type(v) == "table" then
+                if v.name then name = tostring(v.name) end
+                if tonumber(v.amount) then extra = " x" .. tostring(v.amount) end
+            elseif type(v) ~= "boolean" and tostring(v) ~= "" then
+                extra = " x" .. tostring(v)
+            end
+        end)
+        table.insert(parts, name .. extra)
+    end
+    if #parts == 0 then return "(empty)" end
+    table.sort(parts)
+    local s = table.concat(parts, ", ")
+    if #s > 900 then s = s:sub(1, 900) .. "..." end
+    return s
+end
+local function sendTradeHook(url, partner, ownOff, otherOff, result)
+    local emb = {
+        title = "Trade " .. tostring(result or "Completed") .. " - " .. tostring(partner),
+        fields = {
+            { name = "You Gave", value = fmtOffer(ownOff), inline = false },
+            { name = "You Got", value = fmtOffer(otherOff), inline = false },
+        },
+        color = 0x60A5FA,
+        footer = { text = LocalPlayer.DisplayName },
+        timestamp = hookStamp(),
+    }
+    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+end
 local function tradePlayer(plr)
     local req = getSig("TradeService", "RequestTrade")
     if not req then return false end
@@ -2320,9 +2386,21 @@ local function tradePlayer(plr)
             Stats.tradesOpened += 1
             notify("Trade", plr.DisplayName .. " accepted!")
             clog("Trade OPEN with " .. plr.DisplayName .. ".")
+            lastTradeOffers = { own = nil, other = nil }
             tradeEvt.data = nil
-            waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
+            local endEv = waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
             lastTradeEnd = os.clock()
+            if endEv == "Completed" then
+                clog("Trade COMPLETED with " .. plr.DisplayName .. ".")
+                if F.tradeHookOn and type(F.tradeHookUrl) == "string" and F.tradeHookUrl ~= "" then
+                    local u, o1, o2, pn = F.tradeHookUrl, lastTradeOffers.own, lastTradeOffers.other, plr.DisplayName
+                    task.spawn(function() sendTradeHook(u, pn, o1, o2, "Completed") end)
+                end
+            elseif endEv then
+                clog("Trade ended (" .. tostring(endEv) .. ") with " .. plr.DisplayName .. ".")
+            else
+                clog("Trade wait timed out with " .. plr.DisplayName .. ".")
+            end
             return true
         end
         task.wait(1)
@@ -2359,7 +2437,7 @@ local function doTradeLoop()
             if not tradeTried[c.p.UserId] then table.insert(cands, c) end
         end
         if #cands == 0 then
-            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 90) then
+            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 30) then
                 clog("Trade: nobody matches, hopping...")
                 tradeTried = {}
                 doHop(false)
