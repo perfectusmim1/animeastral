@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice Hub",
-    subtitle = "v1.0 | Auto Farm",
+    subtitle = "v1.1 | Auto Farm",
     sidebarLayout = true,
     theme = "cobalt",
     icon = "rbxassetid://100284944801383",
@@ -83,7 +83,7 @@ local F = {
     statHookUrl = "", statHookOn = false,
     claimQuests = false, hideRolls = false,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
-    saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true,
+    saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
@@ -471,18 +471,72 @@ end)
 TS.TeleportInitFailed:Connect(function(_, _, msg)
     notify("Teleport", "Failed: " .. tostring(msg))
 end)
-local function fpsBoost()
+-- ---- FPS Boost (toggleable, saved in config, re-applied on load) ----
+local fpsRestore, fpsMaintConn = {}, nil
+local function fpsDisable(inst)
     pcall(function()
-        game:GetService("Lighting").GlobalShadows = false
-        for _, o in ipairs(workspace:GetDescendants()) do
-            if o:IsA("ParticleEmitter") or o:IsA("Trail") or o:IsA("Beam") or o:IsA("Smoke") or o:IsA("Fire") or o:IsA("Sparkles") then
-                o.Enabled = false
-            elseif o:IsA("Decal") or o:IsA("Texture") then
-                o.Transparency = 1
-            end
+        if inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
+            if inst.Enabled then table.insert(fpsRestore, { o = inst, p = "Enabled", v = true }) inst.Enabled = false end
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            if inst.Transparency < 1 then table.insert(fpsRestore, { o = inst, p = "Transparency", v = inst.Transparency }) inst.Transparency = 1 end
+        elseif inst:IsA("BasePart") and not inst:IsA("Terrain") then
+            if inst.CastShadow then table.insert(fpsRestore, { o = inst, p = "CastShadow", v = true }) inst.CastShadow = false end
+        elseif inst:IsA("PointLight") or inst:IsA("SpotLight") or inst:IsA("SurfaceLight") then
+            if inst.Enabled then table.insert(fpsRestore, { o = inst, p = "Enabled", v = true }) inst.Enabled = false end
+        elseif inst:IsA("PostEffect") then
+            if inst.Enabled then table.insert(fpsRestore, { o = inst, p = "Enabled", v = true }) inst.Enabled = false end
         end
     end)
-    notify("Performance", "FPS Boost applied.")
+end
+local function fpsSweep(root)
+    for _, o in ipairs(root:GetDescendants()) do fpsDisable(o) end
+end
+local function applyFpsBoost(on)
+    if on then
+        table.clear(fpsRestore)
+        pcall(function()
+            local L = game:GetService("Lighting")
+            table.insert(fpsRestore, { o = L, p = "GlobalShadows", v = L.GlobalShadows })
+            L.GlobalShadows = false
+            table.insert(fpsRestore, { o = L, p = "FogEnd", v = L.FogEnd })
+            L.FogEnd = 100000
+            table.insert(fpsRestore, { o = L, p = "EnvironmentDiffuseScale", v = L.EnvironmentDiffuseScale })
+            L.EnvironmentDiffuseScale = 0
+            table.insert(fpsRestore, { o = L, p = "EnvironmentSpecularScale", v = L.EnvironmentSpecularScale })
+            L.EnvironmentSpecularScale = 0
+        end)
+        pcall(function()
+            local T = workspace.Terrain
+            table.insert(fpsRestore, { o = T, p = "WaterWaveSize", v = T.WaterWaveSize })
+            table.insert(fpsRestore, { o = T, p = "WaterWaveSpeed", v = T.WaterWaveSpeed })
+            table.insert(fpsRestore, { o = T, p = "WaterReflectance", v = T.WaterReflectance })
+            table.insert(fpsRestore, { o = T, p = "Decoration", v = T.Decoration })
+            T.WaterWaveSize = 0
+            T.WaterWaveSpeed = 0
+            T.WaterReflectance = 0
+            T.Decoration = false
+        end)
+        fpsSweep(workspace)
+        pcall(function() for _, e in ipairs(game:GetService("Lighting"):GetDescendants()) do fpsDisable(e) end end)
+        pcall(function()
+            local R = settings().Rendering
+            table.insert(fpsRestore, { o = R, p = "QualityLevel", v = R.QualityLevel })
+            R.QualityLevel = Enum.QualityLevel.Level01
+        end)
+        if not fpsMaintConn then
+            fpsMaintConn = workspace.DescendantAdded:Connect(function(o)
+                if F.fpsOn then fpsDisable(o) end
+            end)
+        end
+        task.delay(8, function() if F.fpsOn then fpsSweep(workspace) end end)
+        notify("Performance", "FPS Boost ON: shadows/particles/decals/lights/postfx off.")
+    else
+        local wasActive = (fpsMaintConn ~= nil) or (#fpsRestore > 0)
+        if fpsMaintConn then fpsMaintConn:Disconnect() fpsMaintConn = nil end
+        for _, r in ipairs(fpsRestore) do pcall(function() r.o[r.p] = r.v end) end
+        table.clear(fpsRestore)
+        if wasActive then notify("Performance", "FPS Boost OFF: effects restored.") end
+    end
 end
 local function hopNotePath() return CFG_FOLDER .. "/lasthop_" .. tostring(LocalPlayer.UserId) .. ".json" end
 local function readHopNote()
@@ -507,19 +561,43 @@ local function doRejoin(sameServer)
     end
     task.spawn(function()
         notify("Rejoin", "Rejoining this server...")
-        for attempt = 1, 3 do
-            local myJob = game.JobId
-            pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, myJob, LocalPlayer) end)
-            local t = 0
-            while t < 10 do
-                task.wait(1) t += 1
-                if game.JobId ~= myJob then return end
+        local myJob = game.JobId
+        local inPrivate = false
+        pcall(function() inPrivate = game.PrivateServerId ~= "" end)
+        local failMsg, pending = nil, false
+        local failConn = TS.TeleportInitFailed:Connect(function(plr, result, msg)
+            if plr == LocalPlayer then
+                pending = false
+                failMsg = tostring((msg and msg ~= "") and msg or result)
             end
-            if attempt < 3 then notify("Rejoin", "Retrying... (" .. attempt .. "/3)") end
+        end)
+        local attempt = 0
+        while attempt < 3 do
+            attempt += 1
+            failMsg, pending = nil, true
+            local ok, err = pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, myJob, LocalPlayer) end)
+            if not ok then
+                pending = false
+                failMsg = tostring(err)
+            end
+            local t = 0
+            while t < 15 and pending do task.wait(1) t += 1 end
+            pending = false
+            if game.JobId ~= myJob then break end -- teleport in progress / rejoined
+            if failMsg then notify("Rejoin", "Attempt " .. attempt .. "/3 failed: " .. failMsg) end
         end
-        notify("Rejoin", "Same-server blocked, hopping public...")
-        task.wait(1)
-        pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+        failConn:Disconnect()
+        if game.JobId ~= myJob then return end
+        if inPrivate then
+            -- private (VIP) instances can't be entered from a public fallback:
+            -- stay put and tell the user why, instead of silently dumping them elsewhere
+            notify("Rejoin", "Private server rejoin blocked (" .. tostring(failMsg or "unknown") .. "). Rejoin manually from the Roblox menu.")
+            log("Rejoin failed in private server: " .. tostring(failMsg or "unknown"))
+        else
+            notify("Rejoin", "Same-server blocked, hopping public...")
+            task.wait(1)
+            pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+        end
     end)
 end
 local function doHop(lowPop)
@@ -527,7 +605,8 @@ local function doHop(lowPop)
         notify("Server Hop", "Searching servers...")
         local cands, cursor, pages = {}, nil, 0
         while pages < 3 do
-            local url = "https://games.roblox.com/v1/games/" .. tostring(game.GameId) .. "/servers/Public?sortOrder=Asc&limit=100"
+            -- NOTE: this endpoint expects the PLACE id, not the universe/GameId
+            local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true"
             if cursor then url = url .. "&cursor=" .. cursor end
             local ok, res = pcall(function() return game:HttpGet(url) end)
             if not ok then break end
@@ -1018,8 +1097,6 @@ U.tower = tTower:CreateToggle({ name = "Auto Towers", value = false,
     end })
 U.towerEquipBest = tTower:CreateToggle({ name = "Equip Best Tower Team", value = true,
     callback = function(v) F.towerEquipBest = v end })
-U.towerDelay = tTower:CreateSlider({ name = "Floor Wait", range = { 0.1, 5 }, increment = 0.1, value = 2, suffix = "s",
-    callback = function(v) F.towerDelay = v end })
 tTower:CreateButton({ name = "Stop Tower", callback = function()
     F.tower = false
     local c = getFn("Towers", "CancelTower") if c then pcall(c) end
@@ -1185,6 +1262,15 @@ local console = tStats:CreateConsole({ name = "Log", height = 160, follow = true
 local function clog(m) pcall(function() console:Append(m) end) end
 
 tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.1 - Speed & Performance</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> Auto Towers rebuilt to match the game's own Auto speed (back-to-back floor calls, no artificial wait)
+<font color="#4ade80">•</font> Stronger FPS Boost: shadows, particles, trails, beams, decals, lights, post effects, terrain water + render quality
+<font color="#4ade80">•</font> FPS Boost is now a toggle - saved with settings and re-applied automatically after rejoin/re-execute
+<font color="#4ade80">•</font> Removed obsolete Floor Wait slider (tower loop is adaptive now)]]
+})
+
+tChanges:CreateText({
     name = '<b><font color="#4ade80">v1.0 - Release</font></b>',
     icon = "rbxassetid://138588191124173",
     text = [[<font color="#4ade80">•</font> Auto Collect Money with live total counter
@@ -1296,7 +1382,8 @@ U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
 U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
     callback = function(v) F.afk = v end })
 tSettings:CreateDivider({ text = "Performance" })
-tSettings:CreateButton({ name = "FPS Boost", callback = function() fpsBoost() end })
+U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Shadows, particles, trails, beams, decals, lights, post effects and terrain details off, render quality lowered. FPS cap is never touched. Saved with settings and re-applied automatically on rejoin.",
+    value = false, callback = function(v) F.fpsOn = v applyFpsBoost(v) end })
 
 -- ---- Webhook ----
 tHooks:CreateDivider({ text = "Roll Alerts" })
@@ -1781,24 +1868,29 @@ local function handleTowerSeq(seq, saw)
     end
     return done
 end
+-- Same pacing as the game's own Auto button (TowerController): CompleteTowerFloor is
+-- called back-to-back with no client-side delay; the server yields until the next
+-- floor is ready. Only empty replies (floor still resolving) get a short poll wait.
 local function driveTower(step)
-    local done, fails, saw = false, 0, false
+    local done, fails = false, 0
     while F.tower and Alive and not done do
         local ok, seq = pcall(step)
         if ok and type(seq) == "table" then
             if #seq > 0 then
                 fails = 0
                 Stats.towerFloors += 1
+                local saw = false
                 for _, act in ipairs(seq) do
                     if type(act) == "table" and act.action ~= "ended" then saw = true break end
                 end
                 done = handleTowerSeq(seq, saw)
+            else
+                task.wait(0.25)
             end
-            task.wait(math.max(tonumber(F.towerDelay) or 2, 0.5))
         else
             fails += 1
-            if fails >= 5 then done = true clog("Tower step failed 5 times, restarting loop.") end
-            task.wait(2)
+            if fails >= 8 then done = true clog("Tower step failed 8 times, restarting loop.") end
+            task.wait(1)
         end
     end
 end
@@ -2214,6 +2306,7 @@ local function applyLoaded(data)
     if s then pcall(function() s:Fire(F.autoRoll) end) end
     applyWS()
     if F.flyOn then setFly(true) end
+    if F.fpsOn then task.spawn(applyFpsBoost, true) end
     if F.sellSync and F.sellThreshold > 0 then
         local s2 = getSig("SellService", "UpdateAutoSell")
         if s2 then pcall(function() s2:Fire(F.sellThreshold) end) end
@@ -2263,6 +2356,7 @@ end)
 adhShutdown = function()
     Alive = false
     pcall(flyStop)
+    pcall(function() applyFpsBoost(false) end)
     pcall(function()
         local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if hum then hum.PlatformStand = false end
