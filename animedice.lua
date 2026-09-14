@@ -603,8 +603,14 @@ local function doRejoin(sameServer)
         end
     end)
 end
+local lastHopAt = 0
 local function doHop(lowPop)
     task.spawn(function()
+        if os.clock() - lastHopAt < 60 then
+            notify("Server Hop", "Cooldown, skipping.")
+            return
+        end
+        lastHopAt = os.clock()
         notify("Server Hop", "Searching servers...")
         local cands, cursor, pages = {}, nil, 0
         while pages < 3 do
@@ -625,15 +631,6 @@ local function doHop(lowPop)
             if not cursor then break end
         end
         if #cands == 0 then
-            local tries = 0
-            local note = readHopNote()
-            if note and note.job == game.JobId then tries = tonumber(note.tries) or 0 end
-            if tries >= 3 then
-                writeHopNote(game.JobId, 0)
-                notify("Server Hop", "Same server 3 times, staying.")
-                return
-            end
-            writeHopNote(game.JobId, tries + 1)
             notify("Server Hop", "List empty, hopping random...")
             pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
             return
@@ -1110,6 +1107,7 @@ for _, n in ipairs(towerNames) do
     towerByLabel[lbl] = n
     table.insert(towerLabels, lbl)
 end
+local instantSmartCheck = nil -- assigned after smartTowerPick is defined below
 U.towerSel = tTower:CreateDropdown({ name = "Tower", options = towerLabels, value = towerLabels[1],
     callback = function(sel)
         local lbl = (type(sel) == "table") and (sel[1] or towerLabels[1]) or sel
@@ -1122,8 +1120,8 @@ U.tower = tTower:CreateToggle({ name = "Auto Towers", value = false,
     end })
 U.towerEquipBest = tTower:CreateToggle({ name = "Equip Best Tower Team", value = true,
     callback = function(v) F.towerEquipBest = v end })
-U.smartTower = tTower:CreateToggle({ name = "Smart Tower (auto pick)", description = "Team gücüne göre girilebilen en yüksek towerı seçer. Infinity dahil değil.", value = false,
-    callback = function(v) F.smartTower = v end })
+U.smartTower = tTower:CreateToggle({ name = "Smart Tower (auto pick)", description = "Picks the highest tower your team can clear. Excludes Infinity.", value = false,
+    callback = function(v) F.smartTower = v if v and instantSmartCheck then task.spawn(instantSmartCheck) end end })
 tTower:CreateButton({ name = "Stop Tower", callback = function()
     F.tower = false
     local c = getFn("Towers", "CancelTower") if c then pcall(c) end
@@ -2007,6 +2005,26 @@ local function smartTowerPick()
     end
     return best or F.towerName, best and { reach = bestReach, score = bestScore } or nil
 end
+local function syncTowerDropdown()
+    pcall(function()
+        for lbl, n in pairs(towerByLabel) do
+            if n == F.towerName and U.towerSel then U.towerSel:Set(lbl, true) break end
+        end
+    end)
+end
+instantSmartCheck = function()
+    if not F.smartTower then return end
+    local pick, info = smartTowerPick()
+    if pick and pick ~= F.towerName then
+        F.towerName = pick
+        clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. ")") or ""))
+    elseif pick then
+        clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. ")") or "") .. " - already best")
+    else
+        clog("Smart tower: no team found, keeping " .. tostring(F.towerName))
+    end
+    syncTowerDropdown()
+end
 local function doTowerLoop()
     if Busy.tower then return end
     Busy.tower = true
@@ -2021,15 +2039,15 @@ local function doTowerLoop()
         end
         if F.smartTower then
             local pick, info = smartTowerPick()
-            if pick ~= F.towerName then
+            if pick and pick ~= F.towerName then
                 F.towerName = pick
-                pcall(function()
-                    for lbl, n in pairs(towerByLabel) do
-                        if n == pick and U.towerSel then U.towerSel:Set(lbl, true) break end
-                    end
-                end)
                 clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. ")") or ""))
+            elseif pick then
+                clog("Smart tower checked: " .. pick .. (info and (" (f~" .. info.reach .. ")") or "") .. " - already best")
+            else
+                clog("Smart tower: no team found, keeping " .. tostring(F.towerName))
             end
+            syncTowerDropdown()
         end
         local okStart, started = pcall(play, F.towerName)
         if okStart and started then
@@ -2317,6 +2335,7 @@ local function doTradeLoop()
     if Busy.trade then return end
     Busy.trade = true
     tradeActive = false
+    local loopStart = os.clock()
     pcall(function()
         local en = getSig("TradeService", "SetTradeRequestsEnabled")
         if en then en:Fire(true) end
@@ -2329,7 +2348,7 @@ local function doTradeLoop()
             if not tradeTried[c.p.UserId] then table.insert(cands, c) end
         end
         if #cands == 0 then
-            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) then
+            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 90) then
                 clog("Trade: nobody matches, hopping...")
                 tradeTried = {}
                 doHop(false)
@@ -2451,24 +2470,6 @@ end
 pcall(loadConfig)
 pcall(armReexec)
 pcall(watchRolls)
-pcall(function()
-    local note = readHopNote()
-    if note and note.job == game.JobId and (os.time() - (tonumber(note.time) or 0)) < 120 then
-        local tries = tonumber(note.tries) or 0
-        if tries >= 1 and tries < 3 then
-            writeHopNote(game.JobId, tries + 1)
-            task.spawn(function()
-                task.wait(5)
-                if Alive then
-                    notify("Server Hop", "Same server, hopping again (" .. (tries + 1) .. "/3)...")
-                    pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
-                end
-            end)
-        elseif tries >= 3 then
-            writeHopNote(game.JobId, 0)
-        end
-    end
-end)
 task.spawn(function()
     while Alive do
         task.wait(10)
