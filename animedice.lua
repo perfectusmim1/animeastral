@@ -54,7 +54,7 @@ local window = Rayfield:CreateWindow({
     name = "Anime Dice",
     subtitle = "v1.2 | Perfectus",
     sidebarLayout = true,
-    theme = "cobalt",
+    theme = "default",
     icon = "rbxassetid://100284944801383",
     configuration = {
         autoSave = false,
@@ -758,23 +758,38 @@ local function buildTraitOptions()
     return out
 end
 local function ownedUnitNames()
-    local counts = {}
-    for _, e in pairs(inventory()) do
-        if isUnitEntry(e) then counts[e.name] = (counts[e.name] or 0) + 1 end
+    local counts, seen = {}, {}
+    local function add(key, e)
+        if seen[key] or not isUnitEntry(e) then return end
+        seen[key] = true
+        counts[e.name] = (counts[e.name] or 0) + 1
     end
+    for key, e in pairs(inventory()) do add(key, e) end
+    -- placed units may be absent from the inventory snapshot: resolve via slot ids
+    pcall(function()
+        for _, d in pairs(slots()) do
+            if type(d) == "table" and d.unitId then add(d.unitId, invEntry(d.unitId)) end
+        end
+    end)
     return counts
 end
 local function unitExtraByName(kind)
     local extra = {}
-    for _, e in pairs(inventory()) do
-        if isUnitEntry(e) then
-            local v = e.attributes and (kind == "grade" and e.attributes.grade or e.attributes.trait)
-            if v ~= nil and v ~= "" then
-                extra[e.name] = extra[e.name] or {}
-                extra[e.name][tostring(v)] = true
-            end
+    local function add(e)
+        if not isUnitEntry(e) then return end
+        local v = e.attributes and (kind == "grade" and e.attributes.grade or e.attributes.trait)
+        if v ~= nil and v ~= "" then
+            extra[e.name] = extra[e.name] or {}
+            extra[e.name][tostring(v)] = true
         end
     end
+    for _, e in pairs(inventory()) do add(e) end
+    -- same: also read grade/trait off slot-placed units
+    pcall(function()
+        for _, d in pairs(slots()) do
+            if type(d) == "table" and d.unitId then add(invEntry(d.unitId)) end
+        end
+    end)
     return extra
 end
 local function buildUnitOptions(counts, map, kind)
@@ -1218,9 +1233,21 @@ tReroll:CreateButton({ name = "Refresh Grade Units", callback = function()
     refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade")
 end })
 U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", value = false,
-    callback = function(v) F.gradeAll = v end })
+    callback = function(v)
+        F.gradeAll = v
+        if v and F.gradePlacedOnly then
+            F.gradePlacedOnly = false
+            if U.gradePlacedOnly then pcall(function() U.gradePlacedOnly:Set(false, true) end) end
+        end
+    end })
 U.gradePlacedOnly = tReroll:CreateToggle({ name = "Grade: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
-    callback = function(v) F.gradePlacedOnly = v end })
+    callback = function(v)
+        F.gradePlacedOnly = v
+        if v and F.gradeAll then
+            F.gradeAll = false
+            if U.gradeAll then pcall(function() U.gradeAll:Set(false, true) end) end
+        end
+    end })
 U.gradeDelay = tReroll:CreateSlider({ name = "Grade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.gradeDelay = v end })
 U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", value = "", numeric = true, placeholder = "e.g. 100",
@@ -1244,9 +1271,21 @@ tReroll:CreateButton({ name = "Refresh Trait Units", callback = function()
     refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait")
 end })
 U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", value = false,
-    callback = function(v) F.traitAll = v end })
+    callback = function(v)
+        F.traitAll = v
+        if v and F.traitPlacedOnly then
+            F.traitPlacedOnly = false
+            if U.traitPlacedOnly then pcall(function() U.traitPlacedOnly:Set(false, true) end) end
+        end
+    end })
 U.traitPlacedOnly = tReroll:CreateToggle({ name = "Trait: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
-    callback = function(v) F.traitPlacedOnly = v end })
+    callback = function(v)
+        F.traitPlacedOnly = v
+        if v and F.traitAll then
+            F.traitAll = false
+            if U.traitAll then pcall(function() U.traitAll:Set(false, true) end) end
+        end
+    end })
 U.traitDelay = tReroll:CreateSlider({ name = "Trait Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.traitDelay = v end })
 U.rerollReserve = tReroll:CreateInput({ name = "Traits: Stop If Rerolls Reach", value = "", numeric = true, placeholder = "e.g. 50",
@@ -1943,7 +1982,55 @@ local function driveTower(step)
     end
 end
 local smartCapOrder, smartCapUntil = nil, 0
-local function towerTeamMembers()
+-- Real fighting stats = base x (1 + owned upgrade bonus) x active potion bonus (best tier per category).
+-- Verified live: upgrades stack as 1+sum ("Damage Multiplier"=0.2), potions multiply ("Damage Multiplier"=3).
+local function towerMults()
+    local dmg, hp = 1, 1
+    pcall(function()
+        if G.Upgrades then
+            local owned = {}
+            pcall(function() owned = G.DC.Upgrades() or {} end)
+            local du, hu = 0, 0
+            for name in pairs(owned) do
+                local u = G.Upgrades[name]
+                if type(u) == "table" and type(u.buffs) == "table" then
+                    for bn, b in pairs(u.buffs) do
+                        local amt = tonumber(type(b) == "table" and b.amount or b) or 0
+                        local l = tostring(bn):lower()
+                        if l:find("damage") then du += amt
+                        elseif l:find("health") then hu += amt end
+                    end
+                end
+            end
+            dmg *= (1 + du)
+            hp *= (1 + hu)
+        end
+    end)
+    pcall(function()
+        if G.BoostConfig and G.BoostConfig.entries then
+            local active = activePotions()
+            local bestD, bestH = {}, {}
+            for aname in pairs(active) do
+                local e = G.BoostConfig.entries[aname]
+                if e and type(e.buffs) == "table" then
+                    local cat = tostring(e.category or "?")
+                    for bn, b in pairs(e.buffs) do
+                        local amt = tonumber(type(b) == "table" and b.amount or b) or 0
+                        if amt > 0 then
+                            local l = tostring(bn):lower()
+                            if l:find("damage") then bestD[cat] = math.max(bestD[cat] or 0, amt)
+                            elseif l:find("health") then bestH[cat] = math.max(bestH[cat] or 0, amt) end
+                        end
+                    end
+                end
+            end
+            for _, a in pairs(bestD) do dmg *= a end
+            for _, a in pairs(bestH) do hp *= a end
+        end
+    end)
+    return dmg, hp
+end
+local function towerTeamMembers(dmgM, hpM)
     local ms = {}
     local ok, team = pcall(function() return G.DC.TowerTeam() end)
     if not (ok and type(team) == "table") then return ms end
@@ -1956,7 +2043,7 @@ local function towerTeamMembers()
                 pcall(function() ch = cfg.health(e.attributes) end)
                 pcall(function() cd = cfg.damage(e.attributes) end)
                 ch, cd = tonumber(ch) or 0, tonumber(cd) or 0
-                if ch > 0 and cd > 0 then table.insert(ms, { h = ch, d = cd }) end
+                if ch > 0 and cd > 0 then table.insert(ms, { h = ch * (hpM or 1), d = cd * (dmgM or 1) }) end
             end
         end
     end
@@ -2002,7 +2089,8 @@ local function simTower(ref, members)
 end
 local function smartTowerPick()
     if not G.TowersMod then return F.towerName, nil end
-    local members = towerTeamMembers()
+    local dmgM, hpM = towerMults()
+    local members = towerTeamMembers(dmgM, hpM)
     if #members == 0 then return F.towerName, nil end
     local cands = {}
     pcall(function()
@@ -2046,6 +2134,7 @@ local function smartTowerPick()
         end
     end
     table.sort(detail)
+    table.insert(detail, 1, "buffs " .. fmt(dmgM) .. "dmg/" .. fmt(hpM) .. "hp")
     local info = best and { reach = bestReach, score = bestScore, detail = table.concat(detail, ", ") } or nil
     return best or F.towerName, info
 end
@@ -2145,6 +2234,7 @@ local function doGradeTick(manual)
     if #F.gradeTargets == 0 then if manual then notify("Grade", "Select target grades first.") end return end
     if not G.GradesMod then return end
     Busy.grade = true
+    local rolled = false
     pcall(function()
         if currencyAmount("Gems") <= F.gemReserve then return end
         local sig = getSig("GradeService", "Roll")
@@ -2163,6 +2253,7 @@ local function doGradeTick(manual)
                         if gd and gd.protected then
                             if targetAbove(G.GradesMod, g, targets) then
                                 pcall(function() sig:Fire(key, true) end)
+                                rolled = true
                                 clog("Grade FORCE-rolled past protected: " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
                                 return
                             end
@@ -2173,6 +2264,7 @@ local function doGradeTick(manual)
                             end
                         else
                             pcall(function() sig:Fire(key) end)
+                            rolled = true
                             clog("Grade rolled: " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
                             return
                         end
@@ -2182,6 +2274,7 @@ local function doGradeTick(manual)
             if not Alive then return end
         end
     end)
+    if rolled then pcall(function() refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end) end
     Busy.grade = false
 end
 local traitSkipLogged = {}
@@ -2190,6 +2283,7 @@ local function doTraitTick(manual)
     if #F.traitTargets == 0 then if manual then notify("Trait", "Select target traits first.") end return end
     if not G.TraitsMod then return end
     Busy.trait = true
+    local rolled = false
     pcall(function()
         if currencyAmount("Trait Reroll") <= F.rerollReserve then return end
         local sig = getSig("TraitService", "Roll")
@@ -2208,6 +2302,7 @@ local function doTraitTick(manual)
                         if td and td.protected then
                             if targetAbove(G.TraitsMod, t, targets) then
                                 pcall(function() sig:Fire(key, true) end)
+                                rolled = true
                                 clog("Trait FORCE-rolled past protected: " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
                                 return
                             end
@@ -2218,6 +2313,7 @@ local function doTraitTick(manual)
                             end
                         else
                             pcall(function() sig:Fire(key) end)
+                            rolled = true
                             clog("Trait rolled: " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
                             return
                         end
@@ -2227,6 +2323,7 @@ local function doTraitTick(manual)
             if not Alive then return end
         end
     end)
+    if rolled then pcall(function() refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end) end
     Busy.trait = false
 end
 
@@ -2261,6 +2358,10 @@ end
 -- ---- Auto Trade engine ----
 local tradeEvt = { name = "", time = 0, data = nil }
 local lastTradeOffers = { own = nil, other = nil }
+local inTradeSession = false -- driven by TradeEvent: true from Started until Ended/Completed/PartnerLeft
+local tradeSessionPartner = nil
+local tradeCounted = false
+local sendTradeHook -- forward: assigned below, called by the listener at runtime
 local tradeEvtConnected = false
 local function tradeEnsureListener()
     if tradeEvtConnected then return end
@@ -2269,6 +2370,42 @@ local function tradeEnsureListener()
     local ok = pcall(function()
         tradeListenerConn = s:Connect(function(ev, a)
             tradeEvt = { name = tostring(ev), time = os.clock(), data = a }
+            local en = tostring(ev)
+            if type(a) == "table" and a.partner ~= nil then
+                pcall(function()
+                    local p = a.partner
+                    tradeSessionPartner = p.DisplayName or p.Name or tostring(p)
+                end)
+            end
+            -- universal session tracking: counts manual trades too, not just bot requests
+            if en == "Started" then
+                inTradeSession = true
+                if not tradeCounted then
+                    tradeCounted = true
+                    Stats.tradesOpened += 1
+                    lastTradeOffers = { own = nil, other = nil }
+                    notify("Trade", tostring(tradeSessionPartner or "?") .. " - trade opened.")
+                    clog("Trade OPEN with " .. tostring(tradeSessionPartner or "?") .. ".")
+                end
+            elseif en == "Completed" then
+                inTradeSession = false
+                if tradeCounted then
+                    tradeCounted = false
+                    clog("Trade COMPLETED with " .. tostring(tradeSessionPartner or "?") .. ".")
+                    if F.tradeHookOn and type(F.tradeHookUrl) == "string" and F.tradeHookUrl ~= "" then
+                        local u, o1, o2, pn = F.tradeHookUrl, lastTradeOffers.own, lastTradeOffers.other, tostring(tradeSessionPartner or "?")
+                        task.spawn(function() sendTradeHook(u, pn, o1, o2, "Completed") end)
+                    end
+                end
+            elseif en == "Ended" or en == "PartnerLeft" then
+                inTradeSession = false
+                if tradeCounted then
+                    tradeCounted = false
+                    clog("Trade ended (" .. en .. ") with " .. tostring(tradeSessionPartner or "?") .. ".")
+                end
+            elseif en == "RequestExpired" or en == "RequestClosed" then
+                inTradeSession = false
+            end
             pcall(function()
                 if type(a) == "table" then
                     if a.otherOffer ~= nil then lastTradeOffers.other = a.otherOffer end
@@ -2320,6 +2457,7 @@ local function countOffer(off)
 end
 local tradeDriving = false
 local function tradeScreenOpen()
+    if inTradeSession then return true end
     local ok, v = pcall(function() return G.UIRefs.Root.Trading.TradeScreen.Visible end)
     return ok and v and true or false
 end
@@ -2394,7 +2532,7 @@ local function fmtOffer(off)
     if #s > 900 then s = s:sub(1, 900) .. "..." end
     return s
 end
-local function sendTradeHook(url, partner, ownOff, otherOff, result)
+sendTradeHook = function(url, partner, ownOff, otherOff, result)
     local emb = {
         title = "Trade " .. tostring(result or "Completed") .. " - " .. tostring(partner),
         fields = {
@@ -2416,30 +2554,23 @@ local function tradePlayer(plr)
     for a = 1, tries do
         if not F.tradeAuto or not Alive then return false end
         if not plr.Parent then return false end
+        if tradeScreenOpen() then
+            clog("Trade: already in a trade, not requesting " .. plr.DisplayName .. ".")
+            return false
+        end
         tradeEvt = { name = "", time = 0, data = nil }
         pcall(function() req:Fire(plr) end)
         Stats.tradesSent += 1
         clog("Trade request: " .. plr.DisplayName .. " (" .. a .. "/" .. tries .. ")")
         local ev = waitTradeEvent({ Started = true, RequestExpired = true, RequestClosed = true, Ended = true }, 8)
         if ev == "Started" then
-            Stats.tradesOpened += 1
-            notify("Trade", plr.DisplayName .. " accepted!")
-            clog("Trade OPEN with " .. plr.DisplayName .. ".")
-            lastTradeOffers = { own = nil, other = nil }
+            -- counting, open/complete logs and webhook are handled universally by the
+            -- TradeEvent listener (covers manual trades too); here just flow control
+            tradeActive = true
             tradeEvt.data = nil
-            local endEv = waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
+            waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
             lastTradeEnd = os.clock()
-            if endEv == "Completed" then
-                clog("Trade COMPLETED with " .. plr.DisplayName .. ".")
-                if F.tradeHookOn and type(F.tradeHookUrl) == "string" and F.tradeHookUrl ~= "" then
-                    local u, o1, o2, pn = F.tradeHookUrl, lastTradeOffers.own, lastTradeOffers.other, plr.DisplayName
-                    task.spawn(function() sendTradeHook(u, pn, o1, o2, "Completed") end)
-                end
-            elseif endEv then
-                clog("Trade ended (" .. tostring(endEv) .. ") with " .. plr.DisplayName .. ".")
-            else
-                clog("Trade wait timed out with " .. plr.DisplayName .. ".")
-            end
+            tradeActive = false
             return true
         end
         task.wait(1)
@@ -2476,7 +2607,7 @@ local function doTradeLoop()
             if not tradeTried[c.p.UserId] then table.insert(cands, c) end
         end
         if #cands == 0 then
-            if F.tradeHop and not tradeActive and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 30) then
+            if F.tradeHop and not tradeActive and not tradeScreenOpen() and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 30) then
                 clog("Trade: nobody matches, hopping...")
                 tradeTried = {}
                 doHop(false)
@@ -2572,6 +2703,15 @@ local function applyLoaded(data)
             end
         end
     end
+    -- mutual exclusion for configs saved while both were on (placed wins)
+    if F.gradeAll and F.gradePlacedOnly then
+        F.gradeAll = false
+        if U.gradeAll then pcall(function() U.gradeAll:Set(false, true) end) end
+    end
+    if F.traitAll and F.traitPlacedOnly then
+        F.traitAll = false
+        if U.traitAll then pcall(function() U.traitAll:Set(false, true) end) end
+    end
     local s = getSig("RollService", "SetAutoRoll")
     if s then pcall(function() s:Fire(F.autoRoll) end) end
     applyWS()
@@ -2598,6 +2738,13 @@ end
 pcall(loadConfig)
 pcall(armReexec)
 pcall(watchRolls)
+-- inventory data can arrive after script start: rebuild unit dropdowns once warm
+task.spawn(function()
+    task.wait(6)
+    if not Alive then return end
+    pcall(function() refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end)
+    pcall(function() refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end)
+end)
 task.spawn(function()
     while Alive do
         task.wait(10)
