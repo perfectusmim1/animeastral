@@ -76,8 +76,8 @@ local F = {
     sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0, smartSell = false,
     tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2, smartTower = false,
     potionAuto = false, potionDelay = 5, potionBest = true, potionExtend = false, potions = {},
-    gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gemReserve = 0,
-    traitAuto = false, traitDelay = 2, traitTargets = {}, traitUnits = {}, traitAll = false, rerollReserve = 0,
+    gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gradePlacedOnly = false, gemReserve = 0,
+    traitAuto = false, traitDelay = 2, traitTargets = {}, traitUnits = {}, traitAll = false, traitPlacedOnly = false, rerollReserve = 0,
     statHookInterval = 300,
     rollHookUrl = "", rollHookOn = false, rollHookMin = 0,
     statHookUrl = "", statHookOn = false,
@@ -1219,6 +1219,8 @@ tReroll:CreateButton({ name = "Refresh Grade Units", callback = function()
 end })
 U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", value = false,
     callback = function(v) F.gradeAll = v end })
+U.gradePlacedOnly = tReroll:CreateToggle({ name = "Grade: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
+    callback = function(v) F.gradePlacedOnly = v end })
 U.gradeDelay = tReroll:CreateSlider({ name = "Grade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.gradeDelay = v end })
 U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", value = "", numeric = true, placeholder = "e.g. 100",
@@ -1243,6 +1245,8 @@ tReroll:CreateButton({ name = "Refresh Trait Units", callback = function()
 end })
 U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", value = false,
     callback = function(v) F.traitAll = v end })
+U.traitPlacedOnly = tReroll:CreateToggle({ name = "Trait: Placed Units Only", description = "Only reroll units currently placed on slots, ignore idle inventory units. NOTE: when on, the unit name filter is ignored.", value = false,
+    callback = function(v) F.traitPlacedOnly = v end })
 U.traitDelay = tReroll:CreateSlider({ name = "Trait Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.traitDelay = v end })
 U.rerollReserve = tReroll:CreateInput({ name = "Traits: Stop If Rerolls Reach", value = "", numeric = true, placeholder = "e.g. 50",
@@ -1293,6 +1297,7 @@ tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.2 - Trade & Smart Tower</font></b>',
     icon = "rbxassetid://112634880544308",
     text = [[<font color="#4ade80">•</font> Trade webhook: completed trades post partner, what you gave and what you got
+<font color="#4ade80">•</font> Grade/Trait: Placed Units Only option - reroll just your slot team, not idle inventory
 <font color="#4ade80">•</font> Trade stays idle until Min Money is set - no more "nobody matches" hop spam
 <font color="#4ade80">•</font> Server Hop reworked: no 3-try give-up, 30s cooldown instead of hop storms
 <font color="#4ade80">•</font> Smart Tower checks instantly on toggle and reports every run (already best or new pick)
@@ -2093,6 +2098,15 @@ local function doTowerLoop()
 end
 
 local gradeSkipLogged = {}
+local function placedUnitKeys()
+    local set = {}
+    pcall(function()
+        for _, d in pairs(slots()) do
+            if type(d) == "table" and d.unitId then set[d.unitId] = true end
+        end
+    end)
+    return set
+end
 local function targetAbove(mod, cur, set)
     if not mod then return false end
     local co = 0
@@ -2116,9 +2130,10 @@ local function doGradeTick(manual)
         for _, n in ipairs(F.gradeTargets) do targets[n] = true end
         local sel = {}
         if not F.gradeAll then for _, n in ipairs(F.gradeUnits) do sel[n] = true end end
+        local placed = F.gradePlacedOnly and placedUnitKeys() or nil
         for key, e in pairs(inventory()) do
-            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) then
-                if F.gradeAll or sel[e.name] then
+            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
+                if F.gradeAll or F.gradePlacedOnly or sel[e.name] then
                     local g = e.attributes and e.attributes.grade
                     if not g or not targets[g] then
                         local gd = g and G.GradesMod[g]
@@ -2160,9 +2175,10 @@ local function doTraitTick(manual)
         for _, n in ipairs(F.traitTargets) do targets[n] = true end
         local sel = {}
         if not F.traitAll then for _, n in ipairs(F.traitUnits) do sel[n] = true end end
+        local placed = F.traitPlacedOnly and placedUnitKeys() or nil
         for key, e in pairs(inventory()) do
-            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) then
-                if F.traitAll or sel[e.name] then
+            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
+                if F.traitAll or F.traitPlacedOnly or sel[e.name] then
                     local t = e.attributes and e.attributes.trait
                     if not t or not targets[t] then
                         local td = t and G.TraitsMod[t]
