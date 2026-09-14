@@ -1335,7 +1335,8 @@ local function clog(m) pcall(function() console:Append(m) end) end
 tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.2 - Trade & Smart Tower</font></b>',
     icon = "rbxassetid://112634880544308",
-    text = [[<font color="#4ade80">•</font> Trade webhook: completed trades post partner, what you gave and what you got
+    text = [[<font color="#4ade80">•</font> Trade webhook: completed trades post partner, what you gave and what you got (fixed: game sends Ended+reason, not a Completed event)
+<font color="#4ade80">•</font> Trade timeout: accepted trades get 45s, then auto-cancel and move to the next player
 <font color="#4ade80">•</font> Grade/Trait: Placed Units Only option - reroll just your slot team, not idle inventory
 <font color="#4ade80">•</font> Trade stays idle until Min Money is set - no more "nobody matches" hop spam
 <font color="#4ade80">•</font> Server Hop reworked: no 3-try give-up, 30s cooldown instead of hop storms
@@ -2377,7 +2378,8 @@ local function tradeEnsureListener()
                     tradeSessionPartner = p.DisplayName or p.Name or tostring(p)
                 end)
             end
-            -- universal session tracking: counts manual trades too, not just bot requests
+            -- universal session tracking: counts manual trades too, not just bot requests.
+            -- NOTE: completion arrives as Ended with reason ("Completed"/"PartnerLeft"/...), there is no Completed event.
             if en == "Started" then
                 inTradeSession = true
                 if not tradeCounted then
@@ -2387,21 +2389,24 @@ local function tradeEnsureListener()
                     notify("Trade", tostring(tradeSessionPartner or "?") .. " - trade opened.")
                     clog("Trade OPEN with " .. tostring(tradeSessionPartner or "?") .. ".")
                 end
-            elseif en == "Completed" then
+            elseif en == "Ended" then
                 inTradeSession = false
+                local reason = "Ended"
+                pcall(function()
+                    if type(a) == "table" and a.reason ~= nil then reason = tostring(a.reason)
+                    elseif a ~= nil then reason = tostring(a) end
+                end)
                 if tradeCounted then
                     tradeCounted = false
-                    clog("Trade COMPLETED with " .. tostring(tradeSessionPartner or "?") .. ".")
-                    if F.tradeHookOn and type(F.tradeHookUrl) == "string" and F.tradeHookUrl ~= "" then
-                        local u, o1, o2, pn = F.tradeHookUrl, lastTradeOffers.own, lastTradeOffers.other, tostring(tradeSessionPartner or "?")
-                        task.spawn(function() sendTradeHook(u, pn, o1, o2, "Completed") end)
+                    if reason == "Completed" then
+                        clog("Trade COMPLETED with " .. tostring(tradeSessionPartner or "?") .. ".")
+                        if F.tradeHookOn and type(F.tradeHookUrl) == "string" and F.tradeHookUrl ~= "" then
+                            local u, o1, o2, pn = F.tradeHookUrl, lastTradeOffers.own, lastTradeOffers.other, tostring(tradeSessionPartner or "?")
+                            task.spawn(function() sendTradeHook(u, pn, o1, o2, "Completed") end)
+                        end
+                    else
+                        clog("Trade ended (" .. reason .. ") with " .. tostring(tradeSessionPartner or "?") .. ".")
                     end
-                end
-            elseif en == "Ended" or en == "PartnerLeft" then
-                inTradeSession = false
-                if tradeCounted then
-                    tradeCounted = false
-                    clog("Trade ended (" .. en .. ") with " .. tostring(tradeSessionPartner or "?") .. ".")
                 end
             elseif en == "RequestExpired" or en == "RequestClosed" then
                 inTradeSession = false
@@ -2565,10 +2570,17 @@ local function tradePlayer(plr)
         local ev = waitTradeEvent({ Started = true, RequestExpired = true, RequestClosed = true, Ended = true }, 8)
         if ev == "Started" then
             -- counting, open/complete logs and webhook are handled universally by the
-            -- TradeEvent listener (covers manual trades too); here just flow control
+            -- TradeEvent listener (covers manual trades too); here just flow control.
+            -- Accepted trades get 45s to finish, then we cancel and move to the next player.
             tradeActive = true
             tradeEvt.data = nil
-            waitTradeEvent({ Ended = true, Completed = true, PartnerLeft = true }, 900)
+            local endEv = waitTradeEvent({ Ended = true }, 45)
+            if endEv == nil then
+                local c = getSig("TradeService", "CancelTrade")
+                if c then pcall(function() c:Fire() end) end
+                clog("Trade timed out (45s), cancelled: " .. plr.DisplayName .. ".")
+                waitTradeEvent({ Ended = true }, 5)
+            end
             lastTradeEnd = os.clock()
             tradeActive = false
             return true
