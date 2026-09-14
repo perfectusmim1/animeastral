@@ -74,7 +74,7 @@ local F = {
     buyDice = false, equipDice = true, diceDelay = 5,
     autoRoll = false,
     sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0, smartSell = false,
-    tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2,
+    tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2, smartTower = false,
     potionAuto = false, potionDelay = 5, potionBest = true, potionExtend = false, potions = {},
     gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gemReserve = 0,
     traitAuto = false, traitDelay = 2, traitTargets = {}, traitUnits = {}, traitAll = false, rerollReserve = 0,
@@ -127,7 +127,7 @@ need("DiceMod", function() return require(RS.Framework.Features.Rolling.Dice) en
 need("TowersMod", function() return require(RS.Framework.Features.Towers.Towers) end)
 need("BoostConfig", function() return require(RS.Framework.Features.Inventory.Kinds.Boost.BoostConfig) end)
 need("QuestConfig", function() return require(RS.Framework.Features.Quests.QuestConfig) end)
--- need("TradeConfig", function() return require(RS.Framework.Features.Trading.TradeConfig) end) -- TRADE DISABLED
+need("TradeConfig", function() return require(RS.Framework.Features.Trading.TradeConfig) end)
 need("GradesMod", function() return require(RS.Framework.Features.Grades.Grades) end)
 need("TraitsMod", function() return require(RS.Framework.Features.Traits.Traits) end)
 need("Mutations", function() return require(RS.Framework.Features.Inventory.Kinds.Unit.Mutations) end)
@@ -766,22 +766,43 @@ local function ownedUnitNames()
     end
     return counts
 end
-local function buildUnitOptions(counts, map)
+local function unitExtraByName(kind)
+    local extra = {}
+    for _, e in pairs(inventory()) do
+        if isUnitEntry(e) then
+            local v = e.attributes and (kind == "grade" and e.attributes.grade or e.attributes.trait)
+            if v ~= nil and v ~= "" then
+                extra[e.name] = extra[e.name] or {}
+                extra[e.name][tostring(v)] = true
+            end
+        end
+    end
+    return extra
+end
+local function buildUnitOptions(counts, map, kind)
     local labels = {}
     for k in pairs(map) do map[k] = nil end
+    local extra = (kind == "grade" or kind == "trait") and unitExtraByName(kind) or nil
     for name, c in pairs(counts) do
-        local lbl = name .. " (" .. c .. ")"
+        local suffix = ""
+        if extra and extra[name] then
+            local list = {}
+            for v in pairs(extra[name]) do table.insert(list, v) end
+            table.sort(list)
+            suffix = " [" .. table.concat(list, ", ") .. "]"
+        end
+        local lbl = name .. " (" .. c .. ")" .. suffix
         map[lbl] = name
         table.insert(labels, lbl)
     end
     table.sort(labels)
     return labels
 end
-local function refreshUnitDrop(drop, map, keepNames)
+local function refreshUnitDrop(drop, map, keepNames, kind)
     if not drop then return end
     local keep = {}
     for _, n in ipairs(keepNames) do keep[n] = true end
-    drop:Refresh(buildUnitOptions(ownedUnitNames(), map))
+    drop:Refresh(buildUnitOptions(ownedUnitNames(), map, kind))
     local resel = {}
     for lbl, n in pairs(map) do if keep[n] then table.insert(resel, lbl) end end
     if #resel > 0 then drop:Set(resel) end
@@ -949,7 +970,7 @@ local tSell = window:CreateTab({ name = "Sell", icon = "rbxassetid://11833044903
 local tTower = window:CreateTab({ name = "Tower", icon = "rbxassetid://95008289608947" })
 local tPotion = window:CreateTab({ name = "Potion", icon = "rbxassetid://92709571106091" })
 local tReroll = window:CreateTab({ name = "Reroll", icon = "rbxassetid://138588191124173" })
--- local tTrade = window:CreateTab({ name = "Trade", icon = "rbxassetid://72821498911763" }) -- TRADE TAB DISABLED
+local tTrade = window:CreateTab({ name = "Trade", icon = "rbxassetid://72821498911763" })
 window:CreateSection({ name = "Info" })
 local tStats = window:CreateTab({ name = "Stats", icon = "rbxassetid://93129522258096" })
 local tChanges = window:CreateTab({ name = "Changelogs", icon = "rbxassetid://112634880544308" })
@@ -1061,8 +1082,9 @@ tSell:CreateButton({ name = "Sell Now (below threshold)", callback = function() 
 tTower:CreateDivider({ text = "Tower Selection" })
 local towerNames = { "Dragon Tower", "Cursed Tower", "Pirate Tower", "Hidden Leaf Tower", "Infinity Tower" }
 local towerByLabel = {}
+local TOWER_DIFF_FALLBACK = { ["Dragon Tower"] = "Easy", ["Cursed Tower"] = "Medium", ["Pirate Tower"] = "Hard", ["Hidden Leaf Tower"] = "Extreme", ["Infinity Tower"] = "Infinity" }
 local function towerLabel(name)
-    local diff = nil
+    local diff = TOWER_DIFF_FALLBACK[name]
     pcall(function()
         local t = G.TowersMod.Get(name)
         if t and t.difficulty and t.difficulty.name then diff = t.difficulty.name end
@@ -1100,6 +1122,8 @@ U.tower = tTower:CreateToggle({ name = "Auto Towers", value = false,
     end })
 U.towerEquipBest = tTower:CreateToggle({ name = "Equip Best Tower Team", value = true,
     callback = function(v) F.towerEquipBest = v end })
+U.smartTower = tTower:CreateToggle({ name = "Smart Tower (auto pick)", description = "Team gücüne göre girilebilen en yüksek towerı seçer. Infinity dahil değil.", value = false,
+    callback = function(v) F.smartTower = v end })
 tTower:CreateButton({ name = "Stop Tower", callback = function()
     F.tower = false
     local c = getFn("Towers", "CancelTower") if c then pcall(c) end
@@ -1177,7 +1201,7 @@ end })
 
 -- ---- Reroll (Grades & Traits) ----
 tReroll:CreateDivider({ text = "Auto Grade" })
-U.gradeAuto = tReroll:CreateToggle({ name = "Auto Grade", description = "Rolls grades until a target grade hits. Protected grades (S+) are never rolled away.", value = false,
+U.gradeAuto = tReroll:CreateToggle({ name = "Auto Grade", value = false,
     callback = function(v) F.gradeAuto = v end })
 U.gradeTargets = tReroll:CreateDropdown({ name = "Target Grades", multiSelect = true,
     options = buildGradeOptions(), value = {},
@@ -1186,23 +1210,22 @@ U.gradeTargets = tReroll:CreateDropdown({ name = "Target Grades", multiSelect = 
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeByLabel[lbl] if n then table.insert(F.gradeTargets, n) end end end
     end })
 U.gradeUnits = tReroll:CreateDropdown({ name = "Grade Units", multiSelect = true,
-    options = buildUnitOptions(ownedUnitNames(), gradeUnitByLabel), value = {},
+    options = buildUnitOptions(ownedUnitNames(), gradeUnitByLabel, "grade"), value = {},
     callback = function(sel)
         F.gradeUnits = {}
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = gradeUnitByLabel[lbl] if n then table.insert(F.gradeUnits, n) end end end
     end })
 tReroll:CreateButton({ name = "Refresh Grade Units", callback = function()
-    refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits)
+    refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade")
 end })
-U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", description = "On: rolls every unit. Off: only selected Grade Units.", value = false,
+U.gradeAll = tReroll:CreateToggle({ name = "Grade: All Units", value = false,
     callback = function(v) F.gradeAll = v end })
 U.gradeDelay = tReroll:CreateSlider({ name = "Grade Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.gradeDelay = v end })
-U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", description = "Each grade roll costs 1 gem. Stops when gems reach this.", value = "", numeric = true, placeholder = "e.g. 100",
+U.gemReserve = tReroll:CreateInput({ name = "Gem Reserve", value = "", numeric = true, placeholder = "e.g. 100",
     callback = function(t) F.gemReserve = math.floor(tonumber(t) or 0) end })
-tReroll:CreateButton({ name = "Roll Grade Now", callback = function() task.spawn(function() doGradeTick(true) end) end })
 tReroll:CreateDivider({ text = "Auto Trait" })
-U.traitAuto = tReroll:CreateToggle({ name = "Auto Trait", description = "Rolls traits until a target trait hits. Protected traits (Samurai+) are never rolled away.", value = false,
+U.traitAuto = tReroll:CreateToggle({ name = "Auto Trait", value = false,
     callback = function(v) F.traitAuto = v end })
 U.traitTargets = tReroll:CreateDropdown({ name = "Target Traits", multiSelect = true,
     options = buildTraitOptions(), value = {},
@@ -1211,23 +1234,22 @@ U.traitTargets = tReroll:CreateDropdown({ name = "Target Traits", multiSelect = 
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitByLabel[lbl] if n then table.insert(F.traitTargets, n) end end end
     end })
 U.traitUnits = tReroll:CreateDropdown({ name = "Trait Units", multiSelect = true,
-    options = buildUnitOptions(ownedUnitNames(), traitUnitByLabel), value = {},
+    options = buildUnitOptions(ownedUnitNames(), traitUnitByLabel, "trait"), value = {},
     callback = function(sel)
         F.traitUnits = {}
         if type(sel) == "table" then for _, lbl in ipairs(sel) do local n = traitUnitByLabel[lbl] if n then table.insert(F.traitUnits, n) end end end
     end })
 tReroll:CreateButton({ name = "Refresh Trait Units", callback = function()
-    refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits)
+    refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait")
 end })
-U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", description = "On: rolls every unit. Off: only selected Trait Units.", value = false,
+U.traitAll = tReroll:CreateToggle({ name = "Trait: All Units", value = false,
     callback = function(v) F.traitAll = v end })
 U.traitDelay = tReroll:CreateSlider({ name = "Trait Delay", range = { 0.1, 10 }, increment = 0.1, value = 2, suffix = "s",
     callback = function(v) F.traitDelay = v end })
-U.rerollReserve = tReroll:CreateInput({ name = "Reroll Reserve", description = "Each trait roll costs 1 reroll. Stops when rerolls reach this.", value = "", numeric = true, placeholder = "e.g. 50",
+U.rerollReserve = tReroll:CreateInput({ name = "Traits: Stop If Rerolls Reach", value = "", numeric = true, placeholder = "e.g. 50",
     callback = function(t) F.rerollReserve = math.floor(tonumber(t) or 0) end })
 
 -- ---- Trade ----
---[[TRADE-UI-DISABLED (remove this line and the closing line to re-enable)
 tTrade:CreateDivider({ text = "Auto Trade" })
 U.tradeAuto = tTrade:CreateToggle({ name = "Auto Trade", value = false,
     callback = function(v) F.tradeAuto = v end })
@@ -1254,7 +1276,6 @@ tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
 end })
 local tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
 local tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
---TRADE-UI-DISABLED]]
 
 -- ---- Stats ----
 local moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
@@ -1859,9 +1880,14 @@ local function handleTowerSeq(seq, saw)
                 if hasRewards and saw then
                     local w = (Stats.towerWins[F.towerName] or 0) + 1
                     Stats.towerWins[F.towerName] = w
+                    smartCapOrder = nil
                     clog("Tower WIN counted.")
                 elseif not hasRewards then
                     clog("Tower wiped at floor " .. lastTowerFloor .. " (not counted).")
+                    pcall(function()
+                        local t = G.TowersMod.Get(F.towerName)
+                        if t and t.order then smartCapOrder = t.order - 1 smartCapUntil = os.clock() + 300 end
+                    end)
                 else
                     clog("Leftover rewards collected (not counted).")
                 end
@@ -1897,6 +1923,90 @@ local function driveTower(step)
         end
     end
 end
+local smartCapOrder, smartCapUntil = nil, 0
+local function towerTeamMembers()
+    local ms = {}
+    local ok, team = pcall(function() return G.DC.TowerTeam() end)
+    if not (ok and type(team) == "table") then return ms end
+    for _, key in pairs(team) do
+        local e = invEntry(key)
+        if e and e.attributes then
+            local okc, cfg = pcall(function() return G.EntryRegistry.getEntryConfig(e.name) end)
+            if okc and cfg then
+                local ch, cd = 0, 0
+                pcall(function() ch = cfg.health(e.attributes) end)
+                pcall(function() cd = cfg.damage(e.attributes) end)
+                ch, cd = tonumber(ch) or 0, tonumber(cd) or 0
+                if ch > 0 and cd > 0 then table.insert(ms, { h = ch, d = cd }) end
+            end
+        end
+    end
+    return ms
+end
+-- ponytail: 1v1 sequential sim, no-refill, player-first; score favors harder towers so partial-hard can beat full-easy
+local function simTower(ref, members)
+    local maxF = 100
+    pcall(function() maxF = ref.maxFloors or 100 end)
+    local tiers = {}
+    pcall(function()
+        for _, t in ipairs(ref.drops or {}) do
+            if tonumber(t.minFloor) then table.insert(tiers, tonumber(t.minFloor)) end
+        end
+    end)
+    table.sort(tiers)
+    local order = 0
+    pcall(function() order = ref.order or 0 end)
+    local hp = {}
+    for i, m in ipairs(members) do hp[i] = m.h end
+    local reach, score = 0, 0
+    for f = 1, maxF do
+        local eh, ed = 0, 0
+        pcall(function() eh = ref.enemyHealth(f) end)
+        pcall(function() ed = ref.enemyDamage(f) end)
+        eh, ed = tonumber(eh) or math.huge, tonumber(ed) or math.huge
+        local mi = 1
+        while mi <= #members and eh > 0 do
+            if hp[mi] <= 0 then mi += 1 continue end
+            while eh > 0 and hp[mi] > 0 do
+                eh -= members[mi].d
+                if eh > 0 then hp[mi] -= ed end
+            end
+            if hp[mi] <= 0 then mi += 1 end
+        end
+        if eh > 0 then break end
+        reach = f
+        local ti = 0
+        for _, mf in ipairs(tiers) do if f >= mf then ti += 1 end end
+        score += order * 100 + ti * 10
+    end
+    return reach, score
+end
+local function smartTowerPick()
+    if not G.TowersMod then return F.towerName, nil end
+    local members = towerTeamMembers()
+    if #members == 0 then return F.towerName, nil end
+    local cands = {}
+    pcall(function()
+        for name in pairs(G.TowersMod.GetAll()) do
+            if name ~= "Infinity Tower" then
+                local t = G.TowersMod.Get(name)
+                if t and t.order then table.insert(cands, { name = name, ref = t }) end
+            end
+        end
+    end)
+    if #cands == 0 then return F.towerName, nil end
+    local cap = (smartCapOrder and os.clock() < smartCapUntil) and smartCapOrder or nil
+    local best, bestScore, bestReach = nil, -1, 0
+    for _, c in ipairs(cands) do
+        local ord = 99
+        pcall(function() ord = c.ref.order or 99 end)
+        if not (cap and ord > cap) then
+            local reach, score = simTower(c.ref, members)
+            if score > bestScore then best, bestScore, bestReach = c.name, score, reach end
+        end
+    end
+    return best or F.towerName, best and { reach = bestReach, score = bestScore } or nil
+end
 local function doTowerLoop()
     if Busy.tower then return end
     Busy.tower = true
@@ -1908,6 +2018,18 @@ local function doTowerLoop()
             local eb = getSig("Towers", "EquipBestTowerTeam")
             if eb then pcall(function() eb:Fire() end) end
             task.wait(0.5)
+        end
+        if F.smartTower then
+            local pick, info = smartTowerPick()
+            if pick ~= F.towerName then
+                F.towerName = pick
+                pcall(function()
+                    for lbl, n in pairs(towerByLabel) do
+                        if n == pick and U.towerSel then U.towerSel:Set(lbl, true) break end
+                    end
+                end)
+                clog("Smart tower: " .. pick .. (info and (" (f~" .. info.reach .. ")") or ""))
+            end
         end
         local okStart, started = pcall(play, F.towerName)
         if okStart and started then
@@ -2063,7 +2185,6 @@ doClaimQuests = function()
     end
 end
 
---[[TRADE-ENGINE-DISABLED (remove this line and the closing line to re-enable)
 -- ---- Auto Trade engine ----
 local tradeEvt = { name = "", time = 0, data = nil }
 local tradeEvtConnected = false
@@ -2230,7 +2351,6 @@ local function doTradeLoop()
     end
     Busy.trade = false
 end
---TRADE-ENGINE-DISABLED]]
 
 -- ============ CONFIG SAVE/LOAD (per UserId) ============
 local function applyLoaded(data)
@@ -2294,7 +2414,7 @@ local function applyLoaded(data)
                 pcall(function() h:Set(back, true) end)
             elseif k == "gradeUnits" or k == "traitUnits" then
                 local map = (k == "gradeUnits") and gradeUnitByLabel or traitUnitByLabel
-                buildUnitOptions(ownedUnitNames(), map)
+                buildUnitOptions(ownedUnitNames(), map, (k == "gradeUnits") and "grade" or "trait")
                 local keep = {}
                 for _, n in ipairs(F[k]) do keep[n] = true end
                 local back = {}
@@ -2407,7 +2527,6 @@ task.spawn(function()
         elseif not F.tower then was = false end
     end
 end)
---[[TRADE-LOOPS-DISABLED (remove this line and the closing line to re-enable)
 task.spawn(function()
     local wasT = false
     while Alive do
@@ -2424,7 +2543,6 @@ task.spawn(function()
         end
     end
 end)
---TRADE-LOOPS-DISABLED]]
 local lastCollectedTxt = ""
 task.spawn(function()
     while Alive do
@@ -2444,10 +2562,8 @@ task.spawn(function()
             local pn = 0
             pcall(function() for _ in pairs(activePotions()) do pn += 1 end end)
             setStat(potionStat, pn)
---[[TRADE-STATS-DISABLED
             setStat(tradeSentStat, Stats.tradesSent or 0)
             setStat(tradeOpenStat, Stats.tradesOpened or 0)
---TRADE-STATS-DISABLED]]
         end)
     end
 end)
