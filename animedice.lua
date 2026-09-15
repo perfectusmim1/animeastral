@@ -85,12 +85,12 @@ local F = {
     statHookFields = {}, towerHookFields = {},
     claimQuests = false, hideRolls = false,
     codesAuto = false, codesDelay = 300,
-    tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
+    tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeHopDelay = 8, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
     tradeHookUrl = "", tradeHookOn = false,
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 32
+local BUILD = 35
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -813,8 +813,9 @@ local function doRejoin(sameServer)
     end)
 end
 local lastHopAt = 0
-local function doHop(lowPop)
+local function doHop(lowPop, isBlocked)
     task.spawn(function()
+        if type(isBlocked) == "function" and isBlocked() then return end
         if os.clock() - lastHopAt < 30 then
             notify("Server Hop", "Cooldown, skipping.")
             return
@@ -838,6 +839,10 @@ local function doHop(lowPop)
             cursor = data.nextPageCursor
             pages += 1
             if not cursor then break end
+        end
+        if type(isBlocked) == "function" and isBlocked() then
+            notify("Server Hop", "Trade open, hop cancelled.")
+            return
         end
         if #cands == 0 then
             notify("Server Hop", "List empty, hopping random...")
@@ -1513,6 +1518,8 @@ U.tradeRetries = tTrade:CreateSlider({ name = "Retries Per Player", range = { 1,
     callback = function(v) F.tradeRetries = math.floor(v) end })
 U.tradeHop = tTrade:CreateToggle({ name = "Hop When Empty", value = true,
     callback = function(v) F.tradeHop = v end })
+U.tradeHopDelay = tTrade:CreateSlider({ name = "Hop Delay", range = { 1, 30 }, increment = 1, value = 8, suffix = "s",
+    callback = function(v) F.tradeHopDelay = math.floor(v) end })
 U.tradeAutoGo = tTrade:CreateToggle({ name = "Auto Ready + Accept", value = true,
     callback = function(v) F.tradeAutoGo = v end })
 U.tradeNeedOffer = tTrade:CreateToggle({ name = "Require Partner Offer", value = true,
@@ -2937,7 +2944,7 @@ local function driveTrade()
     tradeDriving = true
     local readyTries, accTries = 0, 0
     local t0 = os.clock()
-    while F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 < 300 do
+    while F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 < 45 do
         local d = tradeEvt.data
         if type(d) == "table" then
             if d.phase == "Offer" then
@@ -2963,7 +2970,7 @@ local function driveTrade()
         task.wait(0.5)
     end
     tradeDriving = false
-    if F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 >= 300 then
+    if F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 >= 45 then
         local c = getSig("TradeService", "CancelTrade")
         if c then pcall(function() c:Fire() end) end
         clog("Trade: timed out, cancelled.")
@@ -3103,8 +3110,6 @@ end
 local function tradePlayer(plr)
     local req = getSig("TradeService", "RequestTrade")
     if not req then return false end
-    local cd = 6
-    pcall(function() cd = (G.TradeConfig and G.TradeConfig.REQUEST_COOLDOWN) or 6 end)
     local tries = math.max(1, tonumber(F.tradeRetries) or 3)
     for a = 1, tries do
         if not F.tradeAuto or not Alive then return false end
@@ -3125,7 +3130,7 @@ local function tradePlayer(plr)
             tradeActive = true
             tradeEvt.data = nil
             local endEv = waitTradeEvent({ Ended = true }, 45)
-            if endEv == nil then
+            if endEv == nil and F.tradeAuto and Alive then
                 local c = getSig("TradeService", "CancelTrade")
                 if c then pcall(function() c:Fire() end) end
                 clog("Trade timed out (45s), cancelled: " .. plr.DisplayName .. ".")
@@ -3141,12 +3146,12 @@ local function tradePlayer(plr)
     return false
 end
 local tradeTried = {}
+local tradeEmptySince = 0
 local tradeNoMinWarned = false
 local function doTradeLoop()
     if Busy.trade then return end
     Busy.trade = true
     tradeActive = false
-    local loopStart = os.clock()
     pcall(function()
         local en = getSig("TradeService", "SetTradeRequestsEnabled")
         if en then en:Fire(true) end
@@ -3169,16 +3174,20 @@ local function doTradeLoop()
             if not tradeTried[c.p.UserId] then table.insert(cands, c) end
         end
         if #cands == 0 then
-            if F.tradeHop and not tradeActive and not tradeScreenOpen() and (os.clock() - lastTradeEnd > 60) and (os.clock() - loopStart > 30) then
+            if tradeEmptySince == 0 then tradeEmptySince = os.clock() end
+            local hopDelay = math.clamp(tonumber(F.tradeHopDelay) or 8, 1, 30)
+            if F.tradeHop and not tradeActive and not tradeScreenOpen() and (os.clock() - lastTradeEnd > hopDelay) and (os.clock() - tradeEmptySince >= hopDelay) then
                 clog("Trade: nobody matches, hopping...")
                 tradeTried = {}
-                doHop(false)
+                tradeEmptySince = 0
+                doHop(false, tradeScreenOpen)
                 local t = 0
-                while F.tradeAuto and Alive and t < 25 do task.wait(1) t += 1 end
+                while F.tradeAuto and Alive and t < 12 do task.wait(1) t += 1 end
             else
-                task.wait(8)
+                task.wait(3)
             end
         else
+            tradeEmptySince = 0
             if tradeScreenOpen() then
                 task.wait(3)
             else
