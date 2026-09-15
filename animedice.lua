@@ -90,8 +90,9 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 29
+local BUILD = 30
 local Alive = true
+local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
 local adhShutdown
@@ -1643,7 +1644,7 @@ U.autoMinimize = tSettings:CreateToggle({ name = "Auto Minimize UI", description
     value = false,
     callback = function(v)
         F.autoMinimize = v
-        if v then task.spawn(function() task.wait(2) pcall(function() window:ToggleHide() end) end) end
+        if v and not loadingCfg then task.spawn(function() task.wait(2) pcall(function() window:ToggleHide() end) end) end
     end })
 tSettings:CreateDivider({ text = "Server" })
 tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
@@ -2460,7 +2461,6 @@ local function doTowerLoop()
             lastTowerFloor = 1
             towerRunDrops, towerRunFloor0 = {}, 1
             driveTower(step)
-            task.wait(3)
         else
             local okP, seq = pcall(step)
             if okP and type(seq) == "table" and #seq > 0 then
@@ -2474,7 +2474,6 @@ local function doTowerLoop()
                 local runDone = handleTowerSeq(seq, sawP)
                 if not runDone and towerExitRestart() then runDone = true end
                 if not runDone then driveTower(step) end
-                task.wait(3)
             else
                 clog("Tower failed to start: " .. F.towerName .. " (team/cooldown?)")
                 task.wait(5)
@@ -3117,6 +3116,7 @@ end
 -- ============ CONFIG SAVE/LOAD (per UserId) ============
 local function applyLoaded(data)
     if type(data) ~= "table" then return end
+    loadingCfg = true
     local sF = data.F
     if type(sF) == "table" then
         for k, v in pairs(sF) do
@@ -3212,6 +3212,7 @@ local function applyLoaded(data)
         if s2 then pcall(function() s2:Fire(F.sellThreshold) end) end
     end
     if F.hideRolls then task.spawn(function() syncRollHidden() rollHideBackup(true) end) end
+    loadingCfg = false
     if F.autoMinimize then task.spawn(function() task.wait(3) pcall(function() window:ToggleHide() end) end) end
 end
 local function loadConfig()
