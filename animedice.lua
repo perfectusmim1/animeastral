@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 39
+local BUILD = 40
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -125,7 +125,7 @@ task.spawn(function()
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
-local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat -- forward declarations (defined below)
+local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat, stopTradeAll -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
@@ -1539,13 +1539,46 @@ U.tradeHookUrl = tTrade:CreateInput({ name = "Trade Webhook URL", value = "", pl
 U.tradeHookOn = tTrade:CreateToggle({ name = "Trade Alerts", value = false,
     callback = function(v) F.tradeHookOn = v end })
 tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
+    stopTradeAll()
+end })
+U.tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+U.tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+local stopBtn = nil
+stopTradeAll = function()
     F.tradeAuto = false
     if U.tradeAuto then pcall(function() U.tradeAuto:Set(false, true) end) end
     local c = getSig("TradeService", "CancelTrade")
     if c then pcall(function() c:Fire() end) end
-end })
-U.tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
-U.tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+    notify("Trade", "Auto Trade stopped.")
+end
+pcall(function()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local old = pg:FindFirstChild("ADH_TradeStop")
+    if old then old:Destroy() end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "ADH_TradeStop"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999
+    gui.Parent = pg
+    local b = Instance.new("TextButton")
+    b.Name = "Stop"
+    b.AnchorPoint = Vector2.new(0, 0.5)
+    b.Position = UDim2.new(0, 10, 0.5, 0)
+    b.Size = UDim2.fromOffset(84, 84)
+    b.BackgroundColor3 = Color3.fromRGB(220, 38, 38)
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.Text = "STOP"
+    b.TextScaled = true
+    b.Font = Enum.Font.GothamBold
+    b.Visible = false
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 14)
+    corner.Parent = b
+    b.Parent = gui
+    b.MouseButton1Click:Connect(stopTradeAll)
+    stopBtn = b
+end)
 
 -- ---- Stats ----
 U.moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
@@ -3206,7 +3239,7 @@ local function doTradeLoop()
                 clog("Trade: nobody matches, hopping...")
                 tradeTried = {}
                 tradeEmptySince = 0
-                doHop(false, tradeScreenOpen)
+                doHop(false, function() return (not F.tradeAuto) or tradeScreenOpen() end)
                 local t = 0
                 while F.tradeAuto and Alive and t < 12 do task.wait(1) t += 1 end
             else
@@ -3385,6 +3418,12 @@ end)
 
 adhShutdown = function()
     Alive = false
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local g = pg and pg:FindFirstChild("ADH_TradeStop")
+        if g then g:Destroy() end
+    end)
+    stopBtn = nil
     pcall(flyStop)
     pcall(function() applyFpsBoost(false) end)
     pcall(function()
@@ -3479,6 +3518,7 @@ task.spawn(function()
             setStat(U.potionStat, pn)
             setStat(U.tradeSentStat, Stats.tradesSent or 0)
             setStat(U.tradeOpenStat, Stats.tradesOpened or 0)
+            if stopBtn then stopBtn.Visible = (F.tradeAuto and true) or false end
         end)
     end
 end)
