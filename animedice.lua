@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice",
-    subtitle = "v1.5 | Perfectus",
+    subtitle = "v1.6 | Perfectus",
     sidebarLayout = true,
     theme = "default",
     icon = "rbxassetid://100284944801383",
@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 23
+local BUILD = 28
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -491,13 +491,21 @@ TS.TeleportInitFailed:Connect(function(_, _, msg)
     notify("Teleport", "Failed: " .. tostring(msg))
 end)
 -- ---- FPS Boost (toggleable, saved in config, re-applied on load) ----
-local fpsRestore, fpsMaintConn = {}, nil
+-- Generic pass (shadows/particles/lights/postfx/terrain/render) + Anime Dice
+-- map strip: Leaderboards, BestRoll podium + side statues, Towers tower,
+-- other players' plots/bodies and decor meshes. Hidden instances are kept
+-- alive under nil (not destroyed) so toggling OFF restores everything.
+local fpsRestore, fpsHidden, fpsMaintConn, fpsMaintConn2, fpsKeptPlot = {}, {}, nil, nil, nil
 local function fpsDisable(inst)
     pcall(function()
         if inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
             if inst.Enabled then table.insert(fpsRestore, { o = inst, p = "Enabled", v = true }) inst.Enabled = false end
         elseif inst:IsA("Decal") or inst:IsA("Texture") then
             if inst.Transparency < 1 then table.insert(fpsRestore, { o = inst, p = "Transparency", v = inst.Transparency }) inst.Transparency = 1 end
+        elseif inst:IsA("MeshPart") then
+            if inst.CastShadow then table.insert(fpsRestore, { o = inst, p = "CastShadow", v = true }) inst.CastShadow = false end
+            if inst.TextureID ~= "" then table.insert(fpsRestore, { o = inst, p = "TextureID", v = inst.TextureID }) inst.TextureID = "" end
+            if inst.Material ~= Enum.Material.SmoothPlastic then table.insert(fpsRestore, { o = inst, p = "Material", v = inst.Material }) inst.Material = Enum.Material.SmoothPlastic end
         elseif inst:IsA("BasePart") and not inst:IsA("Terrain") then
             if inst.CastShadow then table.insert(fpsRestore, { o = inst, p = "CastShadow", v = true }) inst.CastShadow = false end
         elseif inst:IsA("PointLight") or inst:IsA("SpotLight") or inst:IsA("SurfaceLight") then
@@ -507,12 +515,152 @@ local function fpsDisable(inst)
         end
     end)
 end
+local function fpsHide(inst)
+    pcall(function()
+        if inst and inst.Parent then
+            for _, h in ipairs(fpsHidden) do if h.o == inst then return end end
+            table.insert(fpsHidden, { o = inst, parent = inst.Parent })
+            inst.Parent = nil
+        end
+    end)
+end
+-- Own plot = the Claimed plot whose PlayerName label matches us; fallback: nearest pivot.
+local function fpsOwnPlot()
+    local plots = workspace:FindFirstChild("Plots")
+    local claimed = plots and plots:FindFirstChild("Claimed")
+    if not claimed then return nil end
+    local meD, meN = "", ""
+    pcall(function() meD = tostring(LocalPlayer.DisplayName or ""):lower() end)
+    pcall(function() meN = tostring(LocalPlayer.Name or ""):lower() end)
+    for _, plot in ipairs(claimed:GetChildren()) do
+        local hit = false
+        pcall(function()
+            for _, d in ipairs(plot:GetDescendants()) do
+                if d:IsA("TextLabel") and d.Name == "PlayerName" then
+                    local t = tostring(d.Text or ""):lower()
+                    if (meD ~= "" and t == meD) or (meN ~= "" and t == meN) then hit = true end
+                    break
+                end
+            end
+        end)
+        if hit then return plot end
+    end
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        local best, bestD = nil, math.huge
+        pcall(function()
+            for _, plot in ipairs(claimed:GetChildren()) do
+                local ok, cf = pcall(function() return plot:GetPivot() end)
+                if ok and cf then
+                    local d = (cf.Position - hrp.Position).Magnitude
+                    if d < bestD then best, bestD = plot, d end
+                end
+            end
+        end)
+        if best then return best end
+    end
+    return nil
+end
+-- Pure decor inside Map: safe to hide (ground plates / stalls / lobby kept).
+local function fpsIsDecor(c)
+    local n = c.Name
+    if c:IsA("Model") then
+        return n == "Palm Tree" or n == "Mountain" or n == "LOW POLY ISLAND" or n == "LightHouse" or n == "Wind"
+    elseif c:IsA("MeshPart") then
+        return n == "Rock 1" or n == "Grass"
+    end
+    return false
+end
+local function applyAnimeDiceStrip()
+    -- leaderboard walls (Rolls/Money/Rarest): ~2800 constantly-updating descendants
+    pcall(function() local lb = workspace:FindFirstChild("Leaderboards") if lb then fpsHide(lb) end end)
+    -- BEST ROLL EVER podium + side statues
+    pcall(function() local b = workspace:FindFirstChild("BestRollPoduium") if b then fpsHide(b) end end)
+    pcall(function() local l = workspace:FindFirstChild("Limiteds") if l then fpsHide(l) end end)
+    -- TOWERS building
+    pcall(function()
+        local m = workspace:FindFirstChild("Map")
+        local t = m and m:FindFirstChild("CastleTower")
+        if t then fpsHide(t) end
+    end)
+    -- empty plot templates
+    pcall(function()
+        local plots = workspace:FindFirstChild("Plots")
+        local un = plots and plots:FindFirstChild("Unclaimed")
+        if un then fpsHide(un) end
+    end)
+    -- other players' bases: keep ours, hide the rest
+    pcall(function()
+        local plots = workspace:FindFirstChild("Plots")
+        local claimed = plots and plots:FindFirstChild("Claimed")
+        if claimed then
+            fpsKeptPlot = fpsOwnPlot()
+            for _, plot in ipairs(claimed:GetChildren()) do
+                if plot ~= fpsKeptPlot then fpsHide(plot) end
+            end
+        end
+    end)
+    -- other players' bodies (our own model stays: Char lives under Players too)
+    pcall(function()
+        local pf = workspace:FindFirstChild("Players")
+        if pf then
+            for _, m in ipairs(pf:GetChildren()) do
+                if m:IsA("Model") and m.Name ~= LocalPlayer.Name then fpsHide(m) end
+            end
+        end
+    end)
+    -- outer islands first (whole top-level Model containers: island ground,
+    -- mountains, lighthouse, moai, palms, fences on them). Only the lobby
+    -- itself (LobbyCircle) and shop conveyors (Conveyor) stay.
+    pcall(function()
+        local m = workspace:FindFirstChild("Map")
+        if not m then return end
+        for _, c in ipairs(m:GetChildren()) do
+            if c:IsA("Model") and c.Name == "Model" and #c:GetDescendants() > 0 then
+                local keep = false
+                pcall(function()
+                    for _, d in ipairs(c:GetDescendants()) do
+                        if d.Name == "LobbyCircle" or d.Name == "Conveyor" then keep = true break end
+                    end
+                end)
+                if not keep then fpsHide(c) end
+            end
+        end
+    end)
+    -- decor meshes (recursive: palms/rocks/clover tufts also sit nested
+    -- inside island models; islands above are already gone so this only
+    -- catches what remains on the main area)
+    pcall(function()
+        local m = workspace:FindFirstChild("Map")
+        if m then
+            for _, c in ipairs(m:GetDescendants()) do
+                if fpsIsDecor(c) then fpsHide(c) end
+            end
+        end
+    end)
+    -- rotating gamepass promos on the right (Double Roll / Jackpot Roll HUD popups).
+    -- Shop menu itself stays untouched, buying still works from the Shop button.
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local root = pg and pg:FindFirstChild("Root")
+        local hud = root and root:FindFirstChild("HUD")
+        local pd = hud and hud:FindFirstChild("ProductDisplay")
+        if pd then fpsHide(pd) end
+    end)
+end
 local function fpsSweep(root)
     for _, o in ipairs(root:GetDescendants()) do fpsDisable(o) end
 end
 local function applyFpsBoost(on)
     if on then
+        -- mirror into the game's own Performance toggle
+        pcall(function()
+            local s = getSig("SettingsService", "SetSetting")
+            if s then s:Fire("Performance", true) end
+        end)
         table.clear(fpsRestore)
+        table.clear(fpsHidden)
+        fpsKeptPlot = nil
         pcall(function()
             local L = game:GetService("Lighting")
             table.insert(fpsRestore, { o = L, p = "GlobalShadows", v = L.GlobalShadows })
@@ -536,6 +684,7 @@ local function applyFpsBoost(on)
             T.Decoration = false
         end)
         fpsSweep(workspace)
+        applyAnimeDiceStrip()
         pcall(function() for _, e in ipairs(game:GetService("Lighting"):GetDescendants()) do fpsDisable(e) end end)
         pcall(function()
             local R = settings().Rendering
@@ -544,17 +693,43 @@ local function applyFpsBoost(on)
         end)
         if not fpsMaintConn then
             fpsMaintConn = workspace.DescendantAdded:Connect(function(o)
-                if F.fpsOn then fpsDisable(o) end
+                if not F.fpsOn then return end
+                fpsDisable(o)
+                -- late joins while ON: hide other players / newly claimed plots immediately
+                pcall(function()
+                    local par = o.Parent
+                    if not par then return end
+                    if par == workspace:FindFirstChild("Players") then
+                        if o:IsA("Model") and o.Name ~= LocalPlayer.Name then fpsHide(o) end
+                    elseif par.Name == "Claimed" and par.Parent and par.Parent.Name == "Plots" then
+                        if o ~= fpsKeptPlot then fpsHide(o) end
+                    end
+                end)
             end)
         end
-        task.delay(8, function() if F.fpsOn then fpsSweep(workspace) end end)
-        notify("Performance", "FPS Boost ON: shadows/particles/decals/lights/postfx off.")
+        if not fpsMaintConn2 then
+            pcall(function()
+                fpsMaintConn2 = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(o)
+                    if not F.fpsOn then return end
+                    if o.Name == "ProductDisplay" then fpsHide(o) end
+                end)
+            end)
+        end
+        task.delay(8, function() if F.fpsOn then fpsSweep(workspace) applyAnimeDiceStrip() end end)
+        notify("Performance", "FPS Boost ON: leaderboards/statues/tower/other bases/promos hidden + shadows/particles/textures off.")
     else
-        local wasActive = (fpsMaintConn ~= nil) or (#fpsRestore > 0)
+        local wasActive = (fpsMaintConn ~= nil) or (fpsMaintConn2 ~= nil) or (#fpsRestore > 0) or (#fpsHidden > 0)
         if fpsMaintConn then fpsMaintConn:Disconnect() fpsMaintConn = nil end
+        if fpsMaintConn2 then fpsMaintConn2:Disconnect() fpsMaintConn2 = nil end
+        for i = #fpsHidden, 1, -1 do
+            local h = fpsHidden[i]
+            pcall(function() h.o.Parent = h.parent end)
+        end
+        table.clear(fpsHidden)
+        fpsKeptPlot = nil
         for _, r in ipairs(fpsRestore) do pcall(function() r.o[r.p] = r.v end) end
         table.clear(fpsRestore)
-        if wasActive then notify("Performance", "FPS Boost OFF: effects restored.") end
+        if wasActive then notify("Performance", "FPS Boost OFF: map and effects restored.") end
     end
 end
 local function hopNotePath() return CFG_FOLDER .. "/lasthop_" .. tostring(LocalPlayer.UserId) .. ".json" end
@@ -1361,6 +1536,13 @@ tStats:CreateButton({ name = "Copy Log", callback = function()
 end })
 
 tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.6 - Game-specific FPS Boost</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> FPS Boost now hides map junk: leaderboards, Best Roll podium + side statues, Towers building, other players/bases and decor meshes (yours stay, OFF restores all)
+<font color="#4ade80">•</font> Mesh textures stripped + flattened to SmoothPlastic on top of the existing shadows/particles/lights/postfx pass]]
+})
+
+tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.5 - Tower Exit & Tower Webhooks</font></b>',
     icon = "rbxassetid://112634880544308",
     text = [[<font color="#4ade80">•</font> Tower: Exit At Floor - leaves the run at your floor, then re-enters automatically
@@ -1478,7 +1660,7 @@ U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
 U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
     callback = function(v) F.afk = v end })
 tSettings:CreateDivider({ text = "Performance" })
-U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Shadows, particles, trails, beams, decals, lights, post effects and terrain details off, render quality lowered. FPS cap is never touched. Saved with settings and re-applied automatically on rejoin.",
+U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Hides leaderboards, Best Roll podium + side statues, Towers building, other players/bases, outer islands, all trees/rocks/clovers/decor and the rotating gamepass promos (lobby, stalls, yours + Shop stay). Plus shadows/particles/mesh-textures/lights/postfx off, render quality lowered. FPS cap is never touched. Saved and re-applied on rejoin.",
     value = false, callback = function(v) F.fpsOn = v applyFpsBoost(v) end })
 tSettings:CreateDivider({ text = "Rayfield Configs" })
 local cfgDrop
@@ -2323,6 +2505,31 @@ local function doGradeTick(manual)
     if Busy.grade then return end
     if #F.gradeTargets == 0 then if manual then notify("Grade", "Select target grades first.") end return end
     if not G.GradesMod then return end
+    -- prune selections whose copy left the inventory (sold/traded), resync the dropdown
+    do
+        local inv = inventory()
+        local placed = placedUnitKeys()
+        local pruned = false
+        for i = #F.gradeUnits, 1, -1 do
+            local k = F.gradeUnits[i]
+            local e = inv[k]
+            if not ((e and isUnitEntry(e)) or placed[k]) then
+                table.remove(F.gradeUnits, i)
+                pruned = true
+            end
+        end
+        if pruned then
+            clog("Grade: dropped missing copies from selection.")
+            pcall(function() refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end)
+        end
+    end
+    if not F.gradeAll and not F.gradePlacedOnly and #F.gradeUnits == 0 then
+        if os.clock() - (gradeSkipLogged._hintT or 0) > 60 then
+            gradeSkipLogged._hintT = os.clock()
+            clog("Grade: no units selected - pick Grade Units or enable All Units.")
+        end
+        return
+    end
     Busy.grade = true
     local rolled = false
     pcall(function()
@@ -2378,6 +2585,31 @@ local function doTraitTick(manual)
     if Busy.trait then return end
     if #F.traitTargets == 0 then if manual then notify("Trait", "Select target traits first.") end return end
     if not G.TraitsMod then return end
+    -- prune selections whose copy left the inventory (sold/traded), resync the dropdown
+    do
+        local inv = inventory()
+        local placed = placedUnitKeys()
+        local pruned = false
+        for i = #F.traitUnits, 1, -1 do
+            local k = F.traitUnits[i]
+            local e = inv[k]
+            if not ((e and isUnitEntry(e)) or placed[k]) then
+                table.remove(F.traitUnits, i)
+                pruned = true
+            end
+        end
+        if pruned then
+            clog("Trait: dropped missing copies from selection.")
+            pcall(function() refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end)
+        end
+    end
+    if not F.traitAll and not F.traitPlacedOnly and #F.traitUnits == 0 then
+        if os.clock() - (traitSkipLogged._hintT or 0) > 60 then
+            traitSkipLogged._hintT = os.clock()
+            clog("Trait: no units selected - pick Trait Units or enable All Units.")
+        end
+        return
+    end
     Busy.trait = true
     local rolled = false
     pcall(function()
