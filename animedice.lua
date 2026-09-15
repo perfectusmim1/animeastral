@@ -52,7 +52,7 @@ end
 
 local window = Rayfield:CreateWindow({
     name = "Anime Dice",
-    subtitle = "v1.3 | Perfectus",
+    subtitle = "v1.5 | Perfectus",
     sidebarLayout = true,
     theme = "default",
     icon = "rbxassetid://100284944801383",
@@ -74,13 +74,14 @@ local F = {
     buyDice = false, equipDice = true, diceDelay = 5,
     autoRoll = false,
     sellThreshold = 0, sellSync = false, sellAuto = false, sellDelay = 10, keepBest = 0, smartSell = false,
-    tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2, smartTower = false,
+    tower = false, towerName = "Dragon Tower", towerEquipBest = true, towerDelay = 2, smartTower = false, towerExitOn = false, towerExitFloor = 0,
     potionAuto = false, potionDelay = 5, potionBest = true, potionExtend = false, potions = {},
     gradeAuto = false, gradeDelay = 2, gradeTargets = {}, gradeUnits = {}, gradeAll = false, gradePlacedOnly = false, gemReserve = 0,
     traitAuto = false, traitDelay = 2, traitTargets = {}, traitUnits = {}, traitAll = false, traitPlacedOnly = false, rerollReserve = 0,
     statHookInterval = 300,
     rollHookUrl = "", rollHookOn = false, rollHookMin = 0,
     statHookUrl = "", statHookOn = false,
+    towerHookUrl = "", towerHookOn = false,
     claimQuests = false, hideRolls = false,
     codesAuto = false, codesDelay = 300,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
@@ -88,7 +89,7 @@ local F = {
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 11
+local BUILD = 17
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -105,7 +106,7 @@ task.spawn(function()
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
-local doInstantSell, doPotionTick, showPotions, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes -- forward declarations (defined below)
+local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
@@ -998,11 +999,6 @@ U.rebirth = tMain:CreateToggle({ name = "Auto Rebirth", value = false,
     callback = function(v) F.rebirth = v end })
 U.rebirthDelay = tMain:CreateSlider({ name = "Rebirth Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
     callback = function(v) F.rebirthDelay = v end })
-tMain:CreateButton({ name = "Rebirth Now", callback = function()
-    local s = getSig("RebirthService", "Rebirth")
-    if s then local ok, err = pcall(function() s:Fire() end)
-        notify("Rebirth", ok and "Request sent." or ("Error: " .. tostring(err))) end
-end })
 
 tMain:CreateDivider({ text = "Roll" })
 U.autoRoll = tMain:CreateToggle({ name = "Auto Roll", value = false,
@@ -1015,7 +1011,6 @@ U.hideRolls = tMain:CreateToggle({ name = "Auto Hide Rolls", value = false,
     callback = function(v) F.hideRolls = v syncRollHidden() rollHideBackup(v) end })
 U.claimQuests = tMain:CreateToggle({ name = "Auto Claim Quests", value = false,
     callback = function(v) F.claimQuests = v end })
-tMain:CreateButton({ name = "Claim Quests Now", callback = function() task.spawn(doClaimQuests) end })
 
 tMain:CreateDivider({ text = "Codes" })
 U.codesAuto = tMain:CreateToggle({ name = "Auto Redeem Codes", value = false,
@@ -1106,7 +1101,9 @@ local function towerLabel(name)
         local t = G.TowersMod.Get(name)
         if t and t.difficulty and t.difficulty.name then diff = t.difficulty.name end
     end)
-    return diff and (name .. " [" .. diff .. "]") or name
+    -- dropdown rows clip long text: drop the redundant " Tower" suffix so the [diff] tag stays visible
+    local short = tostring(name):gsub(" Tower$", "")
+    return diff and (short .. " [" .. diff .. "]") or short
 end
 pcall(function()
     local all = G.TowersMod.GetAll()
@@ -1139,8 +1136,12 @@ U.tower = tTower:CreateToggle({ name = "Auto Towers", value = false,
     end })
 U.towerEquipBest = tTower:CreateToggle({ name = "Equip Best Tower Team", value = true,
     callback = function(v) F.towerEquipBest = v end })
-U.smartTower = tTower:CreateToggle({ name = "Smart Tower (auto pick)", description = "Picks the highest tower your team can clear. Excludes Infinity.", value = false,
+U.smartTower = tTower:CreateToggle({ name = "Smart Tower (auto pick)", value = false,
     callback = function(v) F.smartTower = v if v and instantSmartCheck then task.spawn(instantSmartCheck) end end })
+U.towerExitOn = tTower:CreateToggle({ name = "Exit At Floor", value = false,
+    callback = function(v) F.towerExitOn = v end })
+U.towerExitFloor = tTower:CreateInput({ name = "Exit Floor", value = "", numeric = true, placeholder = "e.g. 50",
+    callback = function(t) F.towerExitFloor = math.floor(tonumber(t) or 0) end })
 tTower:CreateButton({ name = "Stop Tower", callback = function()
     F.tower = false
     local c = getFn("Towers", "CancelTower") if c then pcall(c) end
@@ -1200,12 +1201,10 @@ potDrop = tPotion:CreateDropdown({ name = "Potions", multiSelect = true,
 U.potions = potDrop
 U.potionBest = tPotion:CreateToggle({ name = "Best Per Category", description = "Uses the highest owned tier per category. Lower tiers would be wasted, since only the highest tier per category applies in-game.", value = true,
     callback = function(v) F.potionBest = v end })
-U.potionExtend = tPotion:CreateToggle({ name = "Extend While Active", description = "If on, re-uses the same potion before it expires and extends its duration. If off, waits for expiry.", value = false,
+U.potionExtend = tPotion:CreateToggle({ name = "Extend While Active", value = false,
     callback = function(v) F.potionExtend = v end })
 U.potionDelay = tPotion:CreateSlider({ name = "Potion Check", range = { 0.1, 30 }, increment = 0.1, value = 5, suffix = "s",
     callback = function(v) F.potionDelay = v end })
-tPotion:CreateButton({ name = "Use Now (selected)", callback = function() task.spawn(function() doPotionTick() end) end })
-tPotion:CreateButton({ name = "Show Active", callback = function() showPotions() end })
 tPotion:CreateButton({ name = "Refresh List (show counts)", callback = function()
     if not potDrop then return end
     local keep = {}
@@ -1348,6 +1347,16 @@ tStats:CreateButton({ name = "Copy Log", callback = function()
     local ok = pcall(function() setclipboard(table.concat(LogLines, "\n")) end)
     notify("Log", ok and (#LogLines .. " lines copied.") or "Copy failed.")
 end })
+
+tChanges:CreateText({
+    name = '<b><font color="#60a5fa">v1.5 - Tower Exit & Tower Webhooks</font></b>',
+    icon = "rbxassetid://112634880544308",
+    text = [[<font color="#4ade80">•</font> Tower: Exit At Floor - leaves the run at your floor, then re-enters automatically
+<font color="#4ade80">•</font> Webhook: Tower Alerts - posts run rewards with images on clear and on exit
+<font color="#4ade80">•</font> Tower list: shorter names so difficulty tags always fit
+<font color="#4ade80">•</font> Cleanup: removed Use Now, Show Active, Rebirth Now and Claim Quests Now buttons
+<font color="#4ade80">•</font> Fix: script load error resolved]]
+})
 
 tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.4 - Auto Redeem Codes</font></b>',
@@ -1528,6 +1537,11 @@ tHooks:CreateButton({ name = "Send Test Stats", callback = function()
         end
     end)
 end })
+tHooks:CreateDivider({ text = "Tower Clears" })
+U.towerHookUrl = tHooks:CreateInput({ name = "Tower Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
+    callback = function(t) F.towerHookUrl = t end })
+U.towerHookOn = tHooks:CreateToggle({ name = "Tower Alerts", value = false,
+    callback = function(v) F.towerHookOn = v end })
 
 if not G.ok or #G.missing > 0 then
     notify("Warning", "Some modules failed to load: " .. table.concat(G.missing, ", "))
@@ -1900,16 +1914,6 @@ doPotionTick = function()
     end)
     Busy.potion = false
 end
-showPotions = function()
-    local active = activePotions()
-    local n = 0
-    for name, left in pairs(active) do
-        n += 1
-        clog("Active: " .. name .. " - " .. math.floor(left / 60) .. "m " .. math.floor(left % 60) .. "s left")
-    end
-    if n == 0 then clog("No active potions.") end
-    notify("Potion", n .. " active potion(s).")
-end
 
 doInstantSell = function()
     if F.sellThreshold <= 0 then notify("Sell", "Set a threshold first (e.g. 1t).") return 0 end
@@ -1957,6 +1961,8 @@ local function towerRewardsAdd(rewards)
     end
 end
 local lastTowerFloor = 1
+local sendTowerHook -- forward: assigned below, called by handleTowerSeq/towerExitRestart at runtime
+local towerRunDrops, towerRunFloor0 = {}, 1 -- per-run floor drops (floorCompleted) + start floor for the tower webhook
 local function handleTowerSeq(seq, saw)
     local done = false
     for _, act in ipairs(seq) do
@@ -1964,6 +1970,10 @@ local function handleTowerSeq(seq, saw)
             if act.action == "floorStarted" and tonumber(act.floor) then
                 lastTowerFloor = tonumber(act.floor)
                 if lastTowerFloor % 10 == 0 then clog("Tower floor " .. lastTowerFloor) end
+            elseif act.action == "floorCompleted" and type(act.rewards) == "table" then
+                for rn, ra in pairs(act.rewards) do
+                    towerRunDrops[rn] = (towerRunDrops[rn] or 0) + (tonumber(ra) or 0)
+                end
             elseif act.action == "ended" then
                 done = true
                 local hasRewards = act.rewards and next(act.rewards)
@@ -1978,6 +1988,10 @@ local function handleTowerSeq(seq, saw)
                     Stats.towerWins[F.towerName] = w
                     smartCapOrder = nil
                     clog("Tower WIN counted.")
+                    if F.towerHookOn and type(F.towerHookUrl) == "string" and F.towerHookUrl ~= "" then
+                        local u, nm, f0, fN, dr, bo = F.towerHookUrl, F.towerName, towerRunFloor0, lastTowerFloor, towerRunDrops, act.rewards
+                        task.spawn(function() sendTowerHook(u, nm, f0, fN, dr, bo, "Cleared") end)
+                    end
                 elseif not hasRewards then
                     clog("Tower wiped at floor " .. lastTowerFloor .. " (not counted).")
                     pcall(function()
@@ -1992,6 +2006,19 @@ local function handleTowerSeq(seq, saw)
         end
     end
     return done
+end
+-- Exit-floor farm: leave the run once floor N is reached; the loop re-enters the selected tower.
+local function towerExitRestart()
+    local at = math.floor(tonumber(F.towerExitFloor) or 0)
+    if not F.towerExitOn or at <= 0 or lastTowerFloor < at then return false end
+    pcall(function() local c = getFn("Towers", "CancelTower") if c then c() end end)
+    clog("Tower exit floor reached (" .. lastTowerFloor .. "), restarting " .. tostring(F.towerName) .. ".")
+    if F.towerHookOn and type(F.towerHookUrl) == "string" and F.towerHookUrl ~= "" then
+        local u, nm, f0, fN, dr = F.towerHookUrl, F.towerName, towerRunFloor0, lastTowerFloor, towerRunDrops
+        task.spawn(function() sendTowerHook(u, nm, f0, fN, dr, nil, "Exited") end)
+    end
+    lastTowerFloor = 1
+    return true
 end
 -- Same pacing as the game's own Auto button (TowerController): CompleteTowerFloor is
 -- called back-to-back with no client-side delay; the server yields until the next
@@ -2009,6 +2036,7 @@ local function driveTower(step)
                     if type(act) == "table" and act.action ~= "ended" then saw = true break end
                 end
                 done = handleTowerSeq(seq, saw)
+                if not done and towerExitRestart() then done = true end
             else
                 task.wait(0.25)
             end
@@ -2224,18 +2252,22 @@ local function doTowerLoop()
         if okStart and started then
             clog("Tower started: " .. F.towerName)
             lastTowerFloor = 1
+            towerRunDrops, towerRunFloor0 = {}, 1
             driveTower(step)
             task.wait(3)
         else
             local okP, seq = pcall(step)
             if okP and type(seq) == "table" and #seq > 0 then
                 clog("Found an active tower run, continuing it...")
+                towerRunDrops = {}
                 Stats.towerFloors += 1
                 local sawP = false
                 for _, act in ipairs(seq) do
                     if type(act) == "table" and act.action ~= "ended" then sawP = true break end
                 end
-                if not handleTowerSeq(seq, sawP) then driveTower(step) end
+                local runDone = handleTowerSeq(seq, sawP)
+                if not runDone and towerExitRestart() then runDone = true end
+                if not runDone then driveTower(step) end
                 task.wait(3)
             else
                 clog("Tower failed to start: " .. F.towerName .. " (team/cooldown?)")
@@ -2624,6 +2656,85 @@ sendTradeHook = function(url, partner, ownOff, otherOff, result)
         timestamp = hookStamp(),
     }
     return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+end
+sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
+    local cleared = (result ~= "Exited")
+    local kindOf = {}
+    local function kind(name)
+        if kindOf[name] == nil then
+            local isPot = false
+            pcall(function()
+                local cfg = G.EntryRegistry.getEntryConfig(name)
+                isPot = cfg and cfg.kind == "Boost"
+            end)
+            kindOf[name] = isPot and "pot" or "item"
+        end
+        return kindOf[name]
+    end
+    local function lines(rewards)
+        local pots, items = {}, {}
+        for name, amt in pairs(rewards or {}) do
+            table.insert(kind(name) == "pot" and pots or items, (tonumber(amt) or 0) .. "x " .. tostring(name))
+        end
+        table.sort(pots)
+        table.sort(items)
+        local parts = {}
+        for _, l in ipairs(pots) do table.insert(parts, l) end
+        if #pots > 0 and #items > 0 then table.insert(parts, "· Items ·") end
+        for _, l in ipairs(items) do table.insert(parts, l) end
+        if #parts == 0 then return "-" end
+        local s = table.concat(parts, "\n")
+        if #s > 900 then s = s:sub(1, 900) .. "..." end
+        return s
+    end
+    local fields = {
+        { name = "Floors", value = tostring(floor0 or 1) .. " → " .. tostring(floorN or "?"), inline = true },
+        { name = "Session Wins", value = tostring(Stats.towerWins[towerName] or 0), inline = true },
+    }
+    if cleared then
+        table.insert(fields, { name = "Floor Drops", value = lines(drops), inline = false })
+        table.insert(fields, { name = "Clear Bonus", value = lines(bonus), inline = false })
+    else
+        table.insert(fields, { name = "Run Drops", value = lines(drops), inline = false })
+    end
+    local emb = {
+        title = (cleared and "Tower Cleared - " or "Tower Exited - ") .. tostring(towerName),
+        fields = fields,
+        color = 0xA78BFA,
+        footer = { text = LocalPlayer.DisplayName },
+        timestamp = hookStamp(),
+    }
+    pcall(function()
+        local t = G.TowersMod.Get(towerName)
+        if t and t.image then
+            local th = thumbOf(t.image)
+            if th then emb.thumbnail = { url = th } end
+        end
+    end)
+    local embeds = { emb }
+    -- one embed per item so every drop shows its own image (Discord caps at 10 embeds/message)
+    local totals = {}
+    for name, amt in pairs(drops or {}) do totals[name] = (totals[name] or 0) + (tonumber(amt) or 0) end
+    for name, amt in pairs(bonus or {}) do totals[name] = (totals[name] or 0) + (tonumber(amt) or 0) end
+    local order = {}
+    for name in pairs(totals) do table.insert(order, name) end
+    table.sort(order, function(a, b) return (totals[a] or 0) > (totals[b] or 0) end)
+    for _, name in ipairs(order) do
+        if #embeds >= 10 then break end
+        local cfg = nil
+        pcall(function() cfg = G.EntryRegistry.getEntryConfig(name) end)
+        if cfg and cfg.image then
+            local th = thumbOf(cfg.image)
+            if th then
+                table.insert(embeds, {
+                    title = tostring(totals[name] or 0) .. "x " .. tostring(name),
+                    thumbnail = { url = th },
+                    color = (kind(name) == "pot") and hookColorInt(cfg) or 0x808080,
+                })
+            end
+        end
+    end
+    return postWebhook(url, { username = "Anime Dice Hub", embeds = embeds })
 end
 local function tradePlayer(plr)
     local req = getSig("TradeService", "RequestTrade")
