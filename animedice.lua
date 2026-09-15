@@ -87,10 +87,10 @@ local F = {
     codesAuto = false, codesDelay = 300,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
     tradeHookUrl = "", tradeHookOn = false,
-    saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
+    saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 28
+local BUILD = 29
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -1638,6 +1638,12 @@ U.saveSettings = tSettings:CreateToggle({ name = "Auto Save Settings", value = t
     callback = function(v)
         F.saveSettings = v
         if v then pcall(saveNow) end
+    end })
+U.autoMinimize = tSettings:CreateToggle({ name = "Auto Minimize UI", description = "Automatically minimizes the menu shortly after load. Press Menu Key to show it again.",
+    value = false,
+    callback = function(v)
+        F.autoMinimize = v
+        if v then task.spawn(function() task.wait(2) pcall(function() window:ToggleHide() end) end) end
     end })
 tSettings:CreateDivider({ text = "Server" })
 tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
@@ -3206,6 +3212,7 @@ local function applyLoaded(data)
         if s2 then pcall(function() s2:Fire(F.sellThreshold) end) end
     end
     if F.hideRolls then task.spawn(function() syncRollHidden() rollHideBackup(true) end) end
+    if F.autoMinimize then task.spawn(function() task.wait(3) pcall(function() window:ToggleHide() end) end) end
 end
 local function loadConfig()
     if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
