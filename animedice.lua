@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 43
+local BUILD = 44
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -1551,12 +1551,11 @@ stopTradeAll = function()
     if c then pcall(function() c:Fire() end) end
     notify("Trade", "Auto Trade stopped.")
 end
-task.spawn(function()
-    local pg = LocalPlayer:WaitForChild("PlayerGui", 20)
-    if not pg then return end
-    pcall(function()
-    local old = pg:FindFirstChild("ADH_TradeStop")
-    if old then old:Destroy() end
+local stopBtnReady = false
+local function ensureStopBtn()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    if pg:FindFirstChild("ADH_TradeStop") then return nil end
     local gui = Instance.new("ScreenGui")
     gui.Name = "ADH_TradeStop"
     gui.ResetOnSpawn = false
@@ -1606,10 +1605,8 @@ task.spawn(function()
         end
     end)
     stopBtn = b
-    end)
-end)
-
--- ---- Stats ----
+    return b
+end
 U.moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
 U.rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rbxassetid://134876970337785", changeBaseline = "initial" })
 U.soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
@@ -3548,6 +3545,10 @@ task.spawn(function()
             setStat(U.potionStat, pn)
             setStat(U.tradeSentStat, Stats.tradesSent or 0)
             setStat(U.tradeOpenStat, Stats.tradesOpened or 0)
+            if not stopBtnReady then
+                local ok, b = pcall(ensureStopBtn)
+                if ok and b then stopBtnReady = true clog("Trade STOP button ready.") end
+            end
             if stopBtn then stopBtn.Visible = (F.tradeAuto and true) or false end
         end)
     end
