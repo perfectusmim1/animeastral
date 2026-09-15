@@ -3359,7 +3359,7 @@ task.spawn(function()
 end)
 task.spawn(function()
     while Alive do
-        task.wait(10)
+        task.wait(2)
         if F.saveSettings then pcall(saveNow) end
     end
 end)
