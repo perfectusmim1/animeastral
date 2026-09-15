@@ -90,9 +90,26 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 30
+local BUILD = 31
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
+-- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
+-- reveal with many elements), so poll until the window actually opened and settled.
+local function hideUIAuto()
+    task.spawn(function()
+        local t0, sawOpen = os.clock(), false
+        while os.clock() - t0 < 30 do
+            local hidden, anim = nil, nil
+            pcall(function() hidden = window.hidden anim = window.animating end)
+            if hidden == false then sawOpen = true end
+            if sawOpen and hidden == true then return end
+            if sawOpen and anim == false and hidden == false then
+                pcall(function() window:Hide() end)
+            end
+            task.wait(0.5)
+        end
+    end)
+end
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
 local adhShutdown
@@ -1644,7 +1661,7 @@ U.autoMinimize = tSettings:CreateToggle({ name = "Auto Minimize UI", description
     value = false,
     callback = function(v)
         F.autoMinimize = v
-        if v and not loadingCfg then task.spawn(function() task.wait(2) pcall(function() window:ToggleHide() end) end) end
+        if v and not loadingCfg then hideUIAuto() end
     end })
 tSettings:CreateDivider({ text = "Server" })
 tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
@@ -3213,7 +3230,7 @@ local function applyLoaded(data)
     end
     if F.hideRolls then task.spawn(function() syncRollHidden() rollHideBackup(true) end) end
     loadingCfg = false
-    if F.autoMinimize then task.spawn(function() task.wait(3) pcall(function() window:ToggleHide() end) end) end
+    if F.autoMinimize then hideUIAuto() end
 end
 local function loadConfig()
     if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
