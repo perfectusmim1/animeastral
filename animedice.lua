@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 41
+local BUILD = 42
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -2990,11 +2990,11 @@ local function driveTrade()
     while F.tradeAutoGo and Alive and tradeScreenOpen() and os.clock() - t0 < 45 do
         local d = tradeEvt.data
         if type(d) == "table" then
+            local need = (not F.tradeNeedOffer) or (tonumber(F.tradeMinItems) or 1) <= 0 or countOffer(d.otherOffer) >= math.max(1, tonumber(F.tradeMinItems) or 1)
             if d.phase == "Offer" then
-                local oReady = d.otherReady and true or false
                 local meReady = d.ownReady and true or false
-                local need = (not F.tradeNeedOffer) or (tonumber(F.tradeMinItems) or 1) <= 0 or countOffer(d.otherOffer) >= math.max(1, tonumber(F.tradeMinItems) or 1)
-                if oReady and not meReady and need and readyTries < 3 then
+                if meReady then readyTries = 0 end
+                if need and not meReady and readyTries < 3 then
                     readyTries += 1
                     pcall(function() adv:Fire() end)
                     clog("Trade: auto-ready")
@@ -3002,7 +3002,8 @@ local function driveTrade()
                 end
             elseif d.phase == "Confirm" then
                 local meAcc = d.ownAccepted and true or false
-                if not meAcc and accTries < 3 then
+                if meAcc then accTries = 0 end
+                if need and not meAcc and accTries < 3 then
                     accTries += 1
                     pcall(function() adv:Fire() end)
                     clog("Trade: auto-accept")
