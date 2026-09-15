@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 22
+local BUILD = 23
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -2297,6 +2297,17 @@ local function doTowerLoop()
     Busy.tower = false
 end
 
+-- Game's skip screen (ProtectedGrades/ProtectedTraits): plain Roll is refused while the
+-- current grade/trait is skip-listed. Same read the game's own controller does.
+local function gameSkipProtected(listName, key)
+    if not key or not G.DC then return false end
+    local ok, v = pcall(function()
+        local ob = G.DC[listName][key]
+        if type(ob) == "function" or type(ob) == "table" then return ob() end
+        return ob
+    end)
+    return (ok and v) and true or false
+end
 local gradeSkipLogged = {}
 local function targetAbove(mod, cur, set)
     if not mod then return false end
@@ -2342,6 +2353,12 @@ local function doGradeTick(manual)
                                 clog("Kept protected grade (not rolled): " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
                             end
                         else
+                            if g and gameSkipProtected("ProtectedGrades", g) then
+                                pcall(function() sig:Fire(key, true) end)
+                                rolled = true
+                                clog("Grade skip-confirmed (game skip list): " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
+                                return
+                            end
                             pcall(function() sig:Fire(key) end)
                             rolled = true
                             clog("Grade rolled: " .. tostring(e.name) .. " (" .. tostring(g) .. ")")
@@ -2391,6 +2408,12 @@ local function doTraitTick(manual)
                                 clog("Kept protected trait (not rolled): " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
                             end
                         else
+                            if t and gameSkipProtected("ProtectedTraits", t) then
+                                pcall(function() sig:Fire(key, true) end)
+                                rolled = true
+                                clog("Trait skip-confirmed (game skip list): " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
+                                return
+                            end
                             pcall(function() sig:Fire(key) end)
                             rolled = true
                             clog("Trait rolled: " .. tostring(e.name) .. " (" .. tostring(t) .. ")")
