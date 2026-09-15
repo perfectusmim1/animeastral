@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 31
+local BUILD = 32
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -2525,8 +2525,21 @@ local function targetAbove(mod, cur, set)
 end
 local function doGradeTick(manual)
     if Busy.grade then return end
-    if #F.gradeTargets == 0 then if manual then notify("Grade", "Select target grades first.") end return end
-    if not G.GradesMod then return end
+    if #F.gradeTargets == 0 then
+        if manual then notify("Grade", "Select target grades first.") end
+        if os.clock() - (gradeSkipLogged._noTargetT or 0) > 60 then
+            gradeSkipLogged._noTargetT = os.clock()
+            clog("Grade: no target grades selected.")
+        end
+        return
+    end
+    if not G.GradesMod then
+        if os.clock() - (gradeSkipLogged._noModT or 0) > 60 then
+            gradeSkipLogged._noModT = os.clock()
+            clog("Grade: Grades module not loaded.")
+        end
+        return
+    end
     -- prune selections whose copy left the inventory (sold/traded), resync the dropdown
     do
         local inv = inventory()
@@ -2555,16 +2568,31 @@ local function doGradeTick(manual)
     Busy.grade = true
     local rolled = false
     pcall(function()
-        if currencyAmount("Gems") <= F.gemReserve then return end
+        if currencyAmount("Gems") <= F.gemReserve then
+            if os.clock() - (gradeSkipLogged._gemT or 0) > 60 then
+                gradeSkipLogged._gemT = os.clock()
+                clog("Grade: waiting for Gems (reserve " .. tostring(F.gemReserve) .. ").")
+            end
+            return
+        end
         local sig = getSig("GradeService", "Roll")
-        if not sig then return end
+        if not sig then
+            if os.clock() - (gradeSkipLogged._sigT or 0) > 60 then
+                gradeSkipLogged._sigT = os.clock()
+                clog("Grade: Roll remote missing.")
+            end
+            return
+        end
         local targets = {}
         for _, n in ipairs(F.gradeTargets) do targets[n] = true end
         local sel = {}
         if not F.gradeAll then for _, k in ipairs(F.gradeUnits) do sel[k] = true end end
         local placed = F.gradePlacedOnly and placedUnitKeys() or nil
+        -- NOTE: locked units ARE graded (lock only protects from selling; the game's
+        -- Grades UI rolls locked units fine). Skipping locked here silently did nothing
+        -- for locked best units like the Huge Katakury in the report.
         for key, e in pairs(inventory()) do
-            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
+            if isUnitEntry(e) and (not placed or placed[key]) then
                 if F.gradeAll or F.gradePlacedOnly or sel[key] then
                     local g = e.attributes and e.attributes.grade
                     if not g or not targets[g] then
@@ -2598,6 +2626,10 @@ local function doGradeTick(manual)
             end
             if not Alive then return end
         end
+        if not rolled and os.clock() - (gradeSkipLogged._doneT or 0) > 60 then
+            gradeSkipLogged._doneT = os.clock()
+            clog("Grade: all selected units already at target grade.")
+        end
     end)
     if rolled then pcall(function() refreshUnitDrop(U.gradeUnits, gradeUnitByLabel, F.gradeUnits, "grade") end) end
     Busy.grade = false
@@ -2605,8 +2637,21 @@ end
 local traitSkipLogged = {}
 local function doTraitTick(manual)
     if Busy.trait then return end
-    if #F.traitTargets == 0 then if manual then notify("Trait", "Select target traits first.") end return end
-    if not G.TraitsMod then return end
+    if #F.traitTargets == 0 then
+        if manual then notify("Trait", "Select target traits first.") end
+        if os.clock() - (traitSkipLogged._noTargetT or 0) > 60 then
+            traitSkipLogged._noTargetT = os.clock()
+            clog("Trait: no target traits selected.")
+        end
+        return
+    end
+    if not G.TraitsMod then
+        if os.clock() - (traitSkipLogged._noModT or 0) > 60 then
+            traitSkipLogged._noModT = os.clock()
+            clog("Trait: Traits module not loaded.")
+        end
+        return
+    end
     -- prune selections whose copy left the inventory (sold/traded), resync the dropdown
     do
         local inv = inventory()
@@ -2635,16 +2680,29 @@ local function doTraitTick(manual)
     Busy.trait = true
     local rolled = false
     pcall(function()
-        if currencyAmount("Trait Reroll") <= F.rerollReserve then return end
+        if currencyAmount("Trait Reroll") <= F.rerollReserve then
+            if os.clock() - (traitSkipLogged._gemT or 0) > 60 then
+                traitSkipLogged._gemT = os.clock()
+                clog("Trait: waiting for Trait Reroll (reserve " .. tostring(F.rerollReserve) .. ").")
+            end
+            return
+        end
         local sig = getSig("TraitService", "Roll")
-        if not sig then return end
+        if not sig then
+            if os.clock() - (traitSkipLogged._sigT or 0) > 60 then
+                traitSkipLogged._sigT = os.clock()
+                clog("Trait: Roll remote missing.")
+            end
+            return
+        end
         local targets = {}
         for _, n in ipairs(F.traitTargets) do targets[n] = true end
         local sel = {}
         if not F.traitAll then for _, k in ipairs(F.traitUnits) do sel[k] = true end end
         local placed = F.traitPlacedOnly and placedUnitKeys() or nil
+        -- locked units ARE rerolled (lock only protects from selling)
         for key, e in pairs(inventory()) do
-            if isUnitEntry(e) and not (e.attributes and e.attributes.locked) and (not placed or placed[key]) then
+            if isUnitEntry(e) and (not placed or placed[key]) then
                 if F.traitAll or F.traitPlacedOnly or sel[key] then
                     local t = e.attributes and e.attributes.trait
                     if not t or not targets[t] then
@@ -2677,6 +2735,10 @@ local function doTraitTick(manual)
                 end
             end
             if not Alive then return end
+        end
+        if not rolled and os.clock() - (traitSkipLogged._doneT or 0) > 60 then
+            traitSkipLogged._doneT = os.clock()
+            clog("Trait: all selected units already at target trait.")
         end
     end)
     if rolled then pcall(function() refreshUnitDrop(U.traitUnits, traitUnitByLabel, F.traitUnits, "trait") end) end
