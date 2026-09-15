@@ -3465,4 +3465,4 @@ task.spawn(function()
 end)
 
 notify("Anime Dice - Perfectus", "Loaded (build " .. tostring(BUILD) .. "). Pick a tab and enable features.")
-log("Hub started.")
+log("Hub started (build " .. tostring(BUILD) .. ").")
