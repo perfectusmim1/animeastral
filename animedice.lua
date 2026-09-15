@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 42
+local BUILD = 43
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -1564,20 +1564,47 @@ task.spawn(function()
     gui.Parent = pg
     local b = Instance.new("TextButton")
     b.Name = "Stop"
-    b.AnchorPoint = Vector2.new(0, 0.5)
-    b.Position = UDim2.new(0, 10, 0.5, 0)
-    b.Size = UDim2.fromOffset(84, 84)
-    b.BackgroundColor3 = Color3.fromRGB(220, 38, 38)
+    b.AnchorPoint = Vector2.new(0, 0)
+    b.Position = UDim2.new(0, 14, 0, 90)
+    b.Size = UDim2.fromOffset(168, 168)
+    b.BackgroundColor3 = Color3.fromRGB(15, 20, 30)
+    b.BackgroundTransparency = 0.15
     b.TextColor3 = Color3.fromRGB(255, 255, 255)
     b.Text = "STOP"
     b.TextScaled = true
     b.Font = Enum.Font.GothamBold
+    b.AutoButtonColor = false
     b.Visible = false
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 14)
+    corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = b
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(220, 38, 38)
+    stroke.Thickness = 4
+    stroke.Parent = b
     b.Parent = gui
-    b.MouseButton1Click:Connect(stopTradeAll)
+    local dragging, dragStart, startPos = false, nil, nil
+    b.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = i.Position
+            startPos = b.Position
+        end
+    end)
+    b.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            b.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    b.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            if dragging and dragStart and (i.Position - dragStart).Magnitude < 10 then
+                stopTradeAll()
+            end
+            dragging = false
+        end
+    end)
     stopBtn = b
     end)
 end)
