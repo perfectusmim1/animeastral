@@ -88,8 +88,7 @@ local F = {
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 10
-local DEFAULT_CODES = { "UPDATE1", "UPDATE2", "UPDATE3", "1KCCU", "5KCCU", "10KCCU", "20KCCU", "UPDATE4" }
+local BUILD = 11
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -966,6 +965,10 @@ local function statsHookTick()
 end
 
 -- ============ TABS ============
+-- UI block: tab + temp handles are block-local (chunk limit is 200 locals).
+-- Only towerByLabel/potByLabel/instantSmartCheck and U.* stat handles escape it.
+local towerByLabel, potByLabel, instantSmartCheck = {}, {}, nil
+do
 window:CreateSection({ name = "Farm" })
 local tMain = window:CreateTab({ name = "Main", icon = "rbxassetid://77304764857415" })
 local tUnits = window:CreateTab({ name = "Units", icon = "rbxassetid://133003586374441" })
@@ -984,7 +987,7 @@ local tSettings = window:CreateTab({ name = "Settings", icon = "rbxassetid://103
 local tHooks = window:CreateTab({ name = "Webhook", icon = "rbxassetid://137296756955034" })
 
 tMain:CreateDivider({ text = "Money Collection" })
-local collectLine = tMain:CreateConsole({ name = "Collected Total", height = 48, text = "Total collected: 0" })
+U.collectLine = tMain:CreateConsole({ name = "Collected Total", height = 48, text = "Total collected: 0" })
 U.collect = tMain:CreateToggle({ name = "Auto Collect Money", value = false,
     callback = function(v) F.collect = v end })
 U.collectDelay = tMain:CreateSlider({ name = "Collect Delay", range = { 0.1, 15 }, increment = 0.1, value = 2, suffix = "s",
@@ -1096,7 +1099,6 @@ tSell:CreateButton({ name = "Sell Now (below threshold)", callback = function() 
 -- ---- Tower ----
 tTower:CreateDivider({ text = "Tower Selection" })
 local towerNames = { "Dragon Tower", "Cursed Tower", "Pirate Tower", "Hidden Leaf Tower", "Infinity Tower" }
-local towerByLabel = {}
 local TOWER_DIFF_FALLBACK = { ["Dragon Tower"] = "Easy", ["Cursed Tower"] = "Medium", ["Pirate Tower"] = "Hard", ["Hidden Leaf Tower"] = "Extreme", ["Infinity Tower"] = "Infinity" }
 local function towerLabel(name)
     local diff = TOWER_DIFF_FALLBACK[name]
@@ -1125,7 +1127,6 @@ for _, n in ipairs(towerNames) do
     towerByLabel[lbl] = n
     table.insert(towerLabels, lbl)
 end
-local instantSmartCheck = nil -- assigned after smartTowerPick is defined below
 U.towerSel = tTower:CreateDropdown({ name = "Tower", options = towerLabels, value = towerLabels[1],
     callback = function(sel)
         local lbl = (type(sel) == "table") and (sel[1] or towerLabels[1]) or sel
@@ -1144,15 +1145,15 @@ tTower:CreateButton({ name = "Stop Tower", callback = function()
     F.tower = false
     local c = getFn("Towers", "CancelTower") if c then pcall(c) end
 end })
-local towerStat = tTower:CreateStat({ name = "Tower Wins", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
-local floorStat = tTower:CreateStat({ name = "Tower Steps", value = 0, icon = "rbxassetid://112002461760953", changeMode = "absolute" })
-local floorNowStat = tTower:CreateStat({ name = "Tower Floor", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
+U.towerStat = tTower:CreateStat({ name = "Tower Wins", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
+U.floorStat = tTower:CreateStat({ name = "Tower Steps", value = 0, icon = "rbxassetid://112002461760953", changeMode = "absolute" })
+U.floorNowStat = tTower:CreateStat({ name = "Tower Floor", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
 
 -- ---- Potion ----
 tPotion:CreateDivider({ text = "Auto Potion" })
 U.potionAuto = tPotion:CreateToggle({ name = "Auto Potion", value = false,
     callback = function(v) F.potionAuto = v end })
-local potDrop, potByLabel = nil, {}
+local potDrop = nil
 local function potBuffText(e)
     local parts = {}
     for bn, b in pairs(e.buffs or {}) do
@@ -1325,14 +1326,14 @@ tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
     local c = getSig("TradeService", "CancelTrade")
     if c then pcall(function() c:Fire() end) end
 end })
-local tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
-local tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+U.tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+U.tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
 
 -- ---- Stats ----
-local moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
-local rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rbxassetid://134876970337785", changeBaseline = "initial" })
-local soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
-local potionStat = tStats:CreateStat({ name = "Active Potions", value = 0, icon = "rbxassetid://92709571106091", changeMode = "absolute" })
+U.moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
+U.rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rbxassetid://134876970337785", changeBaseline = "initial" })
+U.soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
+U.potionStat = tStats:CreateStat({ name = "Active Potions", value = 0, icon = "rbxassetid://92709571106091", changeMode = "absolute" })
 local console = tStats:CreateConsole({ name = "Log", height = 160, follow = true, maxLines = 120 })
 local LogLines, LOG_KEEP = {}, 200
 clog = function(m)
@@ -1413,8 +1414,8 @@ tChanges:CreateText({
 
 tStats:CreateDivider({ text = "General" })
 tStats:CreateButton({ name = "Reset Growth Stats", callback = function()
-    pcall(function() moneyStat:ResetBaseline() end)
-    pcall(function() rollStat:ResetBaseline() end)
+    pcall(function() U.moneyStat:ResetBaseline() end)
+    pcall(function() U.rollStat:ResetBaseline() end)
 end })
 tStats:CreateKeybind({ name = "Menu Key", value = Enum.KeyCode.RightShift,
     callback = function() pcall(function() window:ToggleHide() end) end })
@@ -1534,6 +1535,7 @@ if not G.ok or #G.missing > 0 then
 else
     clog("Ready. Money: " .. fmt(money()))
 end
+end -- end UI block (tab + temp handles stay block-local; chunk limit 200)
 
 -- ============ WORKER LOGIC ============
 local function doCollect()
@@ -2929,19 +2931,19 @@ task.spawn(function()
             local txt = "Total collected: " .. fmt(Stats.collectedMoney)
             if txt ~= lastCollectedTxt then
                 lastCollectedTxt = txt
-                pcall(function() collectLine:Set(txt) end)
+                pcall(function() U.collectLine:Set(txt) end)
             end
-            setStat(towerStat, Stats.towerWins[F.towerName] or 0)
-            setStat(floorStat, Stats.towerFloors)
-            setStat(floorNowStat, lastTowerFloor)
-            setStat(moneyStat, money())
-            setStat(rollStat, rolls())
-            setStat(soldStat, Stats.sold)
+            setStat(U.towerStat, Stats.towerWins[F.towerName] or 0)
+            setStat(U.floorStat, Stats.towerFloors)
+            setStat(U.floorNowStat, lastTowerFloor)
+            setStat(U.moneyStat, money())
+            setStat(U.rollStat, rolls())
+            setStat(U.soldStat, Stats.sold)
             local pn = 0
             pcall(function() for _ in pairs(activePotions()) do pn += 1 end end)
-            setStat(potionStat, pn)
-            setStat(tradeSentStat, Stats.tradesSent or 0)
-            setStat(tradeOpenStat, Stats.tradesOpened or 0)
+            setStat(U.potionStat, pn)
+            setStat(U.tradeSentStat, Stats.tradesSent or 0)
+            setStat(U.tradeOpenStat, Stats.tradesOpened or 0)
         end)
     end
 end)
