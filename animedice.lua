@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 44
+local BUILD = 45
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -125,7 +125,7 @@ task.spawn(function()
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
-local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat, stopTradeAll -- forward declarations (defined below)
+local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
@@ -1538,75 +1538,18 @@ U.tradeHookUrl = tTrade:CreateInput({ name = "Trade Webhook URL", value = "", pl
     callback = function(t) F.tradeHookUrl = t end })
 U.tradeHookOn = tTrade:CreateToggle({ name = "Trade Alerts", value = false,
     callback = function(v) F.tradeHookOn = v end })
-tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
-    stopTradeAll()
-end })
-U.tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
-U.tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
-local stopBtn = nil
-stopTradeAll = function()
+local function stopTradeAll()
     F.tradeAuto = false
     if U.tradeAuto then pcall(function() U.tradeAuto:Set(false, true) end) end
     local c = getSig("TradeService", "CancelTrade")
     if c then pcall(function() c:Fire() end) end
     notify("Trade", "Auto Trade stopped.")
 end
-local stopBtnReady = false
-local function ensureStopBtn()
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then return nil end
-    if pg:FindFirstChild("ADH_TradeStop") then return nil end
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "ADH_TradeStop"
-    gui.ResetOnSpawn = false
-    gui.DisplayOrder = 999
-    gui.Parent = pg
-    local b = Instance.new("TextButton")
-    b.Name = "Stop"
-    b.AnchorPoint = Vector2.new(0, 0)
-    b.Position = UDim2.new(0, 14, 0, 90)
-    b.Size = UDim2.fromOffset(168, 168)
-    b.BackgroundColor3 = Color3.fromRGB(15, 20, 30)
-    b.BackgroundTransparency = 0.15
-    b.TextColor3 = Color3.fromRGB(255, 255, 255)
-    b.Text = "STOP"
-    b.TextScaled = true
-    b.Font = Enum.Font.GothamBold
-    b.AutoButtonColor = false
-    b.Visible = false
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = b
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(220, 38, 38)
-    stroke.Thickness = 4
-    stroke.Parent = b
-    b.Parent = gui
-    local dragging, dragStart, startPos = false, nil, nil
-    b.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = i.Position
-            startPos = b.Position
-        end
-    end)
-    b.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dragStart
-            b.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end)
-    b.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            if dragging and dragStart and (i.Position - dragStart).Magnitude < 10 then
-                stopTradeAll()
-            end
-            dragging = false
-        end
-    end)
-    stopBtn = b
-    return b
-end
+tTrade:CreateButton({ name = "Stop + Cancel Trade", callback = function()
+    stopTradeAll()
+end })
+U.tradeSentStat = tTrade:CreateStat({ name = "Requests Sent", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
+U.tradeOpenStat = tTrade:CreateStat({ name = "Trades Opened", value = 0, icon = "rbxassetid://72821498911763", changeMode = "absolute" })
 U.moneyStat = tStats:CreateStat({ name = "Money", value = money(), icon = "rbxassetid://93129522258096", changeBaseline = "initial" })
 U.rollStat = tStats:CreateStat({ name = "Rolls", value = rolls(), icon = "rbxassetid://134876970337785", changeBaseline = "initial" })
 U.soldStat = tStats:CreateStat({ name = "Sold", value = 0, icon = "rbxassetid://118330449034393", changeMode = "absolute" })
@@ -3445,12 +3388,6 @@ end)
 
 adhShutdown = function()
     Alive = false
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local g = pg and pg:FindFirstChild("ADH_TradeStop")
-        if g then g:Destroy() end
-    end)
-    stopBtn = nil
     pcall(flyStop)
     pcall(function() applyFpsBoost(false) end)
     pcall(function()
@@ -3545,11 +3482,6 @@ task.spawn(function()
             setStat(U.potionStat, pn)
             setStat(U.tradeSentStat, Stats.tradesSent or 0)
             setStat(U.tradeOpenStat, Stats.tradesOpened or 0)
-            if not stopBtnReady then
-                local ok, b = pcall(ensureStopBtn)
-                if ok and b then stopBtnReady = true clog("Trade STOP button ready.") end
-            end
-            if stopBtn then stopBtn.Visible = (F.tradeAuto and true) or false end
         end)
     end
 end)
