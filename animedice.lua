@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 40
+local BUILD = 41
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -1551,9 +1551,10 @@ stopTradeAll = function()
     if c then pcall(function() c:Fire() end) end
     notify("Trade", "Auto Trade stopped.")
 end
-pcall(function()
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+task.spawn(function()
+    local pg = LocalPlayer:WaitForChild("PlayerGui", 20)
     if not pg then return end
+    pcall(function()
     local old = pg:FindFirstChild("ADH_TradeStop")
     if old then old:Destroy() end
     local gui = Instance.new("ScreenGui")
@@ -1578,6 +1579,7 @@ pcall(function()
     b.Parent = gui
     b.MouseButton1Click:Connect(stopTradeAll)
     stopBtn = b
+    end)
 end)
 
 -- ---- Stats ----
