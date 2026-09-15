@@ -6,7 +6,7 @@ local LocalPlayer = Players.LocalPlayer
 local AUTOEXEC_CODE = [[loadstring(game:HttpGet("https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/animedice.lua"))()]]
 
 if game.PlaceId ~= 113290951185459 then
-    error("[AnimeDiceHub] This script only works in Anime Dice.", 0)
+    error("[Anime Dice - Perfectus] This script only works in Anime Dice.", 0)
 end
 do
     local blocked = false
@@ -20,9 +20,9 @@ do
     end)
     if blocked then
         pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Anime Dice Hub", Text = "Already running.", Duration = 4 })
+            game:GetService("StarterGui"):SetCore("SendNotification", { Title = "Anime Dice - Perfectus", Text = "Already running.", Duration = 4 })
         end)
-        warn("[AnimeDiceHub] Already running.")
+        warn("[Anime Dice - Perfectus] Already running.")
         return
     end
 end
@@ -46,7 +46,7 @@ do
         if attempt < 4 then task.wait(2) end
     end
     if not Rayfield then
-        error("[AnimeDiceHub] Rayfield failed to load after 4 tries. Re-execute. Last error: " .. tostring(lastErr))
+        error("[Anime Dice - Perfectus] Rayfield failed to load after 4 tries. Re-execute. Last error: " .. tostring(lastErr))
     end
 end
 
@@ -59,8 +59,8 @@ local window = Rayfield:CreateWindow({
     configuration = {
         autoSave = false,
         autoLoad = false,
-        fileName = "AnimeDiceHub",
-        customFolder = "AnimeDiceHub",
+        fileName = "Anime Dice - Perfectus",
+        customFolder = "Anime Dice - Perfectus",
     },
 })
 
@@ -82,6 +82,7 @@ local F = {
     rollHookUrl = "", rollHookOn = false, rollHookMin = 0,
     statHookUrl = "", statHookOn = false,
     towerHookUrl = "", towerHookOn = false,
+    statHookFields = {}, towerHookFields = {},
     claimQuests = false, hideRolls = false,
     codesAuto = false, codesDelay = 300,
     tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
@@ -89,7 +90,7 @@ local F = {
     saveSettings = true, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 17
+local BUILD = 22
 local Alive = true
 local U = {} -- saved UI handles (for per-user config restore)
 local noclipConn, charConn, afkConn, tradeListenerConn, rollWatchConn = nil, nil, nil, nil, nil
@@ -168,7 +169,7 @@ end
 
 G.ok = G.Network ~= nil and G.DC ~= nil
 
-local function log(...) print("[AnimeDiceHub]", ...) end
+local function log(...) print("[Anime Dice - Perfectus]", ...) end
 local function notify(title, content)
     pcall(function() window:Notify({ title = title, content = content, duration = 4 }) end)
 end
@@ -381,7 +382,15 @@ end
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TeleportService")
 local HTS = game:GetService("HttpService")
-local CFG_FOLDER = "AnimeDiceHub"
+local CFG_FOLDER = "Anime Dice - Perfectus"
+local CFG_FOLDER_OLD = "AnimeDiceHub" -- pre-rename folder: read once, saves go to the new one
+local function existingPath(newPath, oldPath)
+    local okE, has = pcall(function() return isfile(newPath) end)
+    if okE and has then return newPath end
+    local okO, hasO = pcall(function() return isfile(oldPath) end)
+    if okO and hasO then return oldPath end
+    return nil
+end
 local lastCfgSaved = ""
 local function cfgPath() return CFG_FOLDER .. "/config_" .. tostring(LocalPlayer.UserId) .. ".json" end
 local function saveNow()
@@ -551,9 +560,9 @@ end
 local function hopNotePath() return CFG_FOLDER .. "/lasthop_" .. tostring(LocalPlayer.UserId) .. ".json" end
 local function readHopNote()
     if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return nil end
-    local okE, has = pcall(function() return isfile(hopNotePath()) end)
-    if not (okE and has) then return nil end
-    local okR, txt = pcall(readfile, hopNotePath())
+    local path = existingPath(hopNotePath(), CFG_FOLDER_OLD .. "/lasthop_" .. tostring(LocalPlayer.UserId) .. ".json")
+    if not path then return nil end
+    local okR, txt = pcall(readfile, path)
     if not okR then return nil end
     local okD, d = pcall(function() return HTS:JSONDecode(txt) end)
     if okD and type(d) == "table" then return d end
@@ -889,7 +898,7 @@ local function sendRollHook(url, e, cfg, chance)
         timestamp = hookStamp(),
     }
     if thumb then emb.thumbnail = { url = thumb } end
-    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+    return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = { emb } })
 end
 local function anyRollHook()
     return F.rollHookOn and true or false
@@ -918,40 +927,43 @@ local function watchRolls()
     end)
 end
 local function sendStatsHook(url)
-    local wins = 0
-    for _, w in pairs(Stats.towerWins) do wins += tonumber(w) or 0 end
-    local pots = 0
-    local potNames = {}
-    pcall(function()
-        for name in pairs(activePotions()) do
-            pots += 1
-            table.insert(potNames, name)
-        end
-    end)
-    table.sort(potNames)
-    local potVal = tostring(pots)
-    if #potNames > 0 then
-        local s = table.concat(potNames, ", ")
-        if #s > 180 then s = s:sub(1, 180) .. "..." end
-        potVal = potVal .. "\n" .. s
+    local sel = F.statHookFields
+    local function want(name)
+        if type(sel) ~= "table" or #sel == 0 then return true end
+        for _, s in ipairs(sel) do if s == name then return true end end
+        return false
     end
+    local fields = {}
+    if want("Money") then table.insert(fields, { name = "Money", value = fmt(money()), inline = true }) end
+    if want("Rolls") then table.insert(fields, { name = "Rolls", value = tostring(rolls()), inline = true }) end
+    if want("Rebirth") then table.insert(fields, { name = "Rebirth", value = tostring(rebirth()), inline = true }) end
     local emb = {
         title = "Session Stats",
-        fields = {
-            { name = "Money", value = fmt(money()), inline = true },
-            { name = "Rolls", value = tostring(rolls()), inline = true },
-            { name = "Rebirth", value = tostring(rebirth()), inline = true },
-            { name = "Units Sold", value = tostring(Stats.sold or 0), inline = true },
-            { name = "Tower Wins", value = tostring(wins), inline = true },
-            { name = "Active Potions", value = potVal, inline = false },
-        },
+        fields = fields,
         color = 0x4ADE80,
         footer = { text = LocalPlayer.DisplayName },
         timestamp = hookStamp(),
     }
     local th = thumbOf("rbxassetid://93129522258096")
     if th then emb.thumbnail = { url = th } end
-    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+    local embeds = { emb }
+    for _, name in ipairs({ "Gems", "Trait Reroll" }) do
+        if want(name) and currencyAmount(name) > 0 then
+            local item = { title = fmt(currencyAmount(name)) .. "x " .. name, color = 0x808080 }
+            pcall(function()
+                local cfg = G.EntryRegistry.getEntryConfig(name)
+                if cfg then
+                    item.color = hookColorInt(cfg)
+                    if cfg.image then
+                        local ith = thumbOf(cfg.image)
+                        if ith then item.thumbnail = { url = ith } end
+                    end
+                end
+            end)
+            table.insert(embeds, item)
+        end
+    end
+    return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = embeds })
 end
 local lastStatsHook = 0
 local function statsHookTick()
@@ -1445,6 +1457,29 @@ U.saveSettings = tSettings:CreateToggle({ name = "Auto Save Settings", value = t
         F.saveSettings = v
         if v then pcall(saveNow) end
     end })
+tSettings:CreateDivider({ text = "Server" })
+tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
+tSettings:CreateButton({ name = "Server Hop", callback = function() doHop(false) end })
+tSettings:CreateButton({ name = "Hop: Low Player Server", callback = function() doHop(true) end })
+tSettings:CreateDivider({ text = "Auto Execute" })
+U.reexec = tSettings:CreateToggle({ name = "Auto Execute On Teleport", value = true,
+    callback = function(v) F.reexec = v end })
+tSettings:CreateDivider({ text = "Character" })
+U.wsOn = tSettings:CreateToggle({ name = "WalkSpeed", value = false,
+    callback = function(v) F.wsOn = v applyWS() end })
+U.wsValue = tSettings:CreateSlider({ name = "WalkSpeed Value", range = { 16, 250 }, increment = 1, value = 16,
+    callback = function(v) F.wsValue = math.floor(v) applyWS() end })
+U.flyOn = tSettings:CreateToggle({ name = "Fly (WASD + Space/Shift)", value = false,
+    callback = function(v) setFly(v) end })
+U.flySpeed = tSettings:CreateSlider({ name = "Fly Speed", range = { 10, 200 }, increment = 5, value = 50,
+    callback = function(v) F.flySpeed = v end })
+U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
+    callback = function(v) F.noclip = v end })
+U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
+    callback = function(v) F.afk = v end })
+tSettings:CreateDivider({ text = "Performance" })
+U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Shadows, particles, trails, beams, decals, lights, post effects and terrain details off, render quality lowered. FPS cap is never touched. Saved with settings and re-applied automatically on rejoin.",
+    value = false, callback = function(v) F.fpsOn = v applyFpsBoost(v) end })
 tSettings:CreateDivider({ text = "Rayfield Configs" })
 local cfgDrop
 local cfgSelName = ""
@@ -1489,29 +1524,6 @@ tSettings:CreateButton({ name = "Delete Selected", callback = function()
 end })
 tSettings:CreateButton({ name = "Refresh Config List", callback = function() refreshCfgList() end })
 refreshCfgList()
-tSettings:CreateDivider({ text = "Server" })
-tSettings:CreateButton({ name = "Rejoin Server", callback = function() doRejoin(true) end })
-tSettings:CreateButton({ name = "Server Hop", callback = function() doHop(false) end })
-tSettings:CreateButton({ name = "Hop: Low Player Server", callback = function() doHop(true) end })
-tSettings:CreateDivider({ text = "Auto Execute" })
-U.reexec = tSettings:CreateToggle({ name = "Auto Execute On Teleport", value = true,
-    callback = function(v) F.reexec = v end })
-tSettings:CreateDivider({ text = "Character" })
-U.wsOn = tSettings:CreateToggle({ name = "WalkSpeed", value = false,
-    callback = function(v) F.wsOn = v applyWS() end })
-U.wsValue = tSettings:CreateSlider({ name = "WalkSpeed Value", range = { 16, 250 }, increment = 1, value = 16,
-    callback = function(v) F.wsValue = math.floor(v) applyWS() end })
-U.flyOn = tSettings:CreateToggle({ name = "Fly (WASD + Space/Shift)", value = false,
-    callback = function(v) setFly(v) end })
-U.flySpeed = tSettings:CreateSlider({ name = "Fly Speed", range = { 10, 200 }, increment = 5, value = 50,
-    callback = function(v) F.flySpeed = v end })
-U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
-    callback = function(v) F.noclip = v end })
-U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
-    callback = function(v) F.afk = v end })
-tSettings:CreateDivider({ text = "Performance" })
-U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Shadows, particles, trails, beams, decals, lights, post effects and terrain details off, render quality lowered. FPS cap is never touched. Saved with settings and re-applied automatically on rejoin.",
-    value = false, callback = function(v) F.fpsOn = v applyFpsBoost(v) end })
 
 -- ---- Webhook ----
 tHooks:CreateDivider({ text = "Roll Alerts" })
@@ -1528,6 +1540,9 @@ U.statHookOn = tHooks:CreateToggle({ name = "Stat Reports", value = false,
     callback = function(v) F.statHookOn = v end })
 U.statHookInterval = tHooks:CreateSlider({ name = "Stat Report Interval", range = { 60, 1800 }, increment = 60, value = 300, suffix = "s",
     callback = function(v) F.statHookInterval = math.floor(v) end })
+U.statHookFields = tHooks:CreateDropdown({ name = "Stat Fields", multiSelect = true,
+    options = { "Money", "Rolls", "Rebirth", "Gems", "Trait Reroll" }, value = {},
+    callback = function(sel) F.statHookFields = (type(sel) == "table") and sel or {} end })
 tHooks:CreateButton({ name = "Send Test Stats", callback = function()
     task.spawn(function()
         if type(F.statHookUrl) == "string" and F.statHookUrl ~= "" then
@@ -1542,6 +1557,9 @@ U.towerHookUrl = tHooks:CreateInput({ name = "Tower Webhook URL", value = "", pl
     callback = function(t) F.towerHookUrl = t end })
 U.towerHookOn = tHooks:CreateToggle({ name = "Tower Alerts", value = false,
     callback = function(v) F.towerHookOn = v end })
+U.towerHookFields = tHooks:CreateDropdown({ name = "Tower Fields", multiSelect = true,
+    options = { "Floors", "Wins", "Floor Drops", "Clear Bonus", "Item Images" }, value = {},
+    callback = function(sel) F.towerHookFields = (type(sel) == "table") and sel or {} end })
 
 if not G.ok or #G.missing > 0 then
     notify("Warning", "Some modules failed to load: " .. table.concat(G.missing, ", "))
@@ -2655,7 +2673,7 @@ sendTradeHook = function(url, partner, ownOff, otherOff, result)
         footer = { text = LocalPlayer.DisplayName },
         timestamp = hookStamp(),
     }
-    return postWebhook(url, { username = "Anime Dice Hub", embeds = { emb } })
+    return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = { emb } })
 end
 sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
     local cleared = (result ~= "Exited")
@@ -2687,15 +2705,20 @@ sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
         if #s > 900 then s = s:sub(1, 900) .. "..." end
         return s
     end
-    local fields = {
-        { name = "Floors", value = tostring(floor0 or 1) .. " → " .. tostring(floorN or "?"), inline = true },
-        { name = "Session Wins", value = tostring(Stats.towerWins[towerName] or 0), inline = true },
-    }
+    local sel = F.towerHookFields
+    local function want(name)
+        if type(sel) ~= "table" or #sel == 0 then return true end
+        for _, s in ipairs(sel) do if s == name then return true end end
+        return false
+    end
+    local fields = {}
+    if want("Floors") then table.insert(fields, { name = "Floors", value = tostring(floor0 or 1) .. " → " .. tostring(floorN or "?"), inline = true }) end
+    if want("Wins") then table.insert(fields, { name = "Session Wins", value = tostring(Stats.towerWins[towerName] or 0), inline = true }) end
     if cleared then
-        table.insert(fields, { name = "Floor Drops", value = lines(drops), inline = false })
-        table.insert(fields, { name = "Clear Bonus", value = lines(bonus), inline = false })
+        if want("Floor Drops") then table.insert(fields, { name = "Floor Drops", value = lines(drops), inline = false }) end
+        if want("Clear Bonus") then table.insert(fields, { name = "Clear Bonus", value = lines(bonus), inline = false }) end
     else
-        table.insert(fields, { name = "Run Drops", value = lines(drops), inline = false })
+        if want("Floor Drops") then table.insert(fields, { name = "Run Drops", value = lines(drops), inline = false }) end
     end
     local emb = {
         title = (cleared and "Tower Cleared - " or "Tower Exited - ") .. tostring(towerName),
@@ -2713,6 +2736,7 @@ sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
     end)
     local embeds = { emb }
     -- one embed per item so every drop shows its own image (Discord caps at 10 embeds/message)
+    if want("Item Images") then
     local totals = {}
     for name, amt in pairs(drops or {}) do totals[name] = (totals[name] or 0) + (tonumber(amt) or 0) end
     for name, amt in pairs(bonus or {}) do totals[name] = (totals[name] or 0) + (tonumber(amt) or 0) end
@@ -2734,7 +2758,8 @@ sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
             end
         end
     end
-    return postWebhook(url, { username = "Anime Dice Hub", embeds = embeds })
+    end
+    return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = embeds })
 end
 local function tradePlayer(plr)
     local req = getSig("TradeService", "RequestTrade")
@@ -2880,6 +2905,8 @@ local function applyLoaded(data)
                 pcall(function() h:Set(back, true) end)
             elseif k == "upgCats" then
                 pcall(function() h:Set(F.upgradeCats, true) end)
+            elseif k == "statHookFields" or k == "towerHookFields" then
+                pcall(function() h:Set(F[k], true) end)
             elseif k == "gradeTargets" then
                 local back = {}
                 for _, n in ipairs(F.gradeTargets) do for lbl, m in pairs(gradeByLabel) do if m == n then table.insert(back, lbl) break end end end
@@ -2927,9 +2954,9 @@ local function applyLoaded(data)
 end
 local function loadConfig()
     if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
-    local okE, has = pcall(function() return isfile(cfgPath()) end)
-    if not (okE and has) then return end
-    local okR, txt = pcall(readfile, cfgPath())
+    local path = existingPath(cfgPath(), CFG_FOLDER_OLD .. "/config_" .. tostring(LocalPlayer.UserId) .. ".json")
+    if not path then return end
+    local okR, txt = pcall(readfile, path)
     if not (okR and txt) then return end
     local okD, data = pcall(function() return HTS:JSONDecode(txt) end)
     if okD and type(data) == "table" then
@@ -3059,5 +3086,5 @@ task.spawn(function()
     end
 end)
 
-notify("Anime Dice Perfectus Hub", "Loaded (build " .. tostring(BUILD) .. "). Pick a tab and enable features.")
+notify("Anime Dice - Perfectus", "Loaded (build " .. tostring(BUILD) .. "). Pick a tab and enable features.")
 log("Hub started.")
