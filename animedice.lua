@@ -85,12 +85,12 @@ local F = {
     statHookFields = {}, towerHookFields = {},
     claimQuests = false, hideRolls = false,
     codesAuto = false, codesDelay = 300,
-    tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeHopDelay = 8, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1,
+    tradeAuto = false, tradeMoney = 0, tradeRetries = 3, tradeHop = true, tradeHopDelay = 8, tradeAutoGo = true, tradeNeedOffer = true, tradeMinItems = 1, tradeChatOn = false, tradeChatMsg = "",
     tradeHookUrl = "", tradeHookOn = false,
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 35
+local BUILD = 36
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -416,7 +416,7 @@ local function saveNow()
     pcall(function() makefolder(CFG_FOLDER) end)
     local ok, txt = pcall(function()
         return HTS:JSONEncode({ v = 1, F = F, thresholdText = (U.sellInput and U.sellInput.value) or "", tradeText = (U.tradeInput and U.tradeInput.value) or "",
-            rollMinText = (U.rollMinT and U.rollMinT.value) or "" })
+            rollMinText = (U.rollMinT and U.rollMinT.value) or "", chatText = (U.tradeChatMsg and U.tradeChatMsg.value) or "" })
     end)
     if not ok or txt == lastCfgSaved then return false end
     local ok2 = pcall(function() writefile(cfgPath(), txt) end)
@@ -1526,6 +1526,10 @@ U.tradeNeedOffer = tTrade:CreateToggle({ name = "Require Partner Offer", value =
     callback = function(v) F.tradeNeedOffer = v end })
 U.tradeMinItems = tTrade:CreateSlider({ name = "Min Partner Items", range = { 0, 10 }, increment = 1, value = 1,
     callback = function(v) F.tradeMinItems = math.floor(v) end })
+U.tradeChatOn = tTrade:CreateToggle({ name = "Trade Chat", value = false,
+    callback = function(v) F.tradeChatOn = v end })
+U.tradeChatMsg = tTrade:CreateInput({ name = "Chat Words (a, b)", value = "", placeholder = "e.g. pls, plsss",
+    callback = function(t) F.tradeChatMsg = t end })
 tTrade:CreateDivider({ text = "Trade Webhook" })
 U.tradeHookUrl = tTrade:CreateInput({ name = "Trade Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
     callback = function(t) F.tradeHookUrl = t end })
@@ -3107,6 +3111,23 @@ sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
     end
     return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = embeds })
 end
+local function sendTradeChat()
+    local raw = tostring(F.tradeChatMsg or "")
+    if raw:gsub("%s", "") == "" then return end
+    local ch = nil
+    pcall(function()
+        ch = game:GetService("TextChatService").TextChannels.RBXGeneral
+    end)
+    if not ch then return end
+    for part in raw:gmatch("[^,]+") do
+        if not F.tradeAuto or not Alive then return end
+        local msg = part:gsub("^%s+", ""):gsub("%s+$", "")
+        if msg ~= "" then
+            pcall(function() ch:SendAsync(msg) end)
+            task.wait(2)
+        end
+    end
+end
 local function tradePlayer(plr)
     local req = getSig("TradeService", "RequestTrade")
     if not req then return false end
@@ -3128,6 +3149,7 @@ local function tradePlayer(plr)
             -- TradeEvent listener (covers manual trades too); here just flow control.
             -- Accepted trades get 45s to finish, then we cancel and move to the next player.
             tradeActive = true
+            if F.tradeChatOn then task.spawn(sendTradeChat) end
             tradeEvt.data = nil
             local endEv = waitTradeEvent({ Ended = true }, 45)
             if endEv == nil and F.tradeAuto and Alive then
@@ -3237,6 +3259,11 @@ local function applyLoaded(data)
         local rx = (type(data.rollMinText) == "string") and data.rollMinText or ""
         pcall(function() U.rollMinT:Set(rx, true) end)
         F.rollHookMin = parseCompact(rx) or 0
+    end
+    if U.tradeChatMsg then
+        local cx = (type(data.chatText) == "string") and data.chatText or ""
+        pcall(function() U.tradeChatMsg:Set(cx, true) end)
+        F.tradeChatMsg = cx
     end
     for k, h in pairs(U) do
         if h and h.Set and k ~= "sellInput" then
