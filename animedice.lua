@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 36
+local BUILD = 39
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -125,7 +125,7 @@ task.spawn(function()
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
 local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
-local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes -- forward declarations (defined below)
+local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
 -- ============ GAME REFS (safe resolution) ============
@@ -415,7 +415,7 @@ local function saveNow()
     if typeof(writefile) ~= "function" or typeof(makefolder) ~= "function" then return false end
     pcall(function() makefolder(CFG_FOLDER) end)
     local ok, txt = pcall(function()
-        return HTS:JSONEncode({ v = 1, F = F, thresholdText = (U.sellInput and U.sellInput.value) or "", tradeText = (U.tradeInput and U.tradeInput.value) or "",
+        return HTS:JSONEncode({ v = 1, F = F, S = Stats, thresholdText = (U.sellInput and U.sellInput.value) or "", tradeText = (U.tradeInput and U.tradeInput.value) or "",
             rollMinText = (U.rollMinT and U.rollMinT.value) or "", chatText = (U.tradeChatMsg and U.tradeChatMsg.value) or "" })
     end)
     if not ok or txt == lastCfgSaved then return false end
@@ -1530,6 +1530,9 @@ U.tradeChatOn = tTrade:CreateToggle({ name = "Trade Chat", value = false,
     callback = function(v) F.tradeChatOn = v end })
 U.tradeChatMsg = tTrade:CreateInput({ name = "Chat Words (a, b)", value = "", placeholder = "e.g. pls, plsss",
     callback = function(t) F.tradeChatMsg = t end })
+tTrade:CreateButton({ name = "Send Test Chat", callback = function()
+    task.spawn(sendTradeChat)
+end })
 tTrade:CreateDivider({ text = "Trade Webhook" })
 U.tradeHookUrl = tTrade:CreateInput({ name = "Trade Webhook URL", value = "", placeholder = "https://discord.com/api/webhooks/...",
     callback = function(t) F.tradeHookUrl = t end })
@@ -2863,6 +2866,7 @@ local function tradeEnsureListener()
                     lastTradeOffers = { own = nil, other = nil }
                     notify("Trade", tostring(tradeSessionPartner or "?") .. " - trade opened.")
                     clog("Trade OPEN with " .. tostring(tradeSessionPartner or "?") .. ".")
+                    if F.tradeChatOn then task.spawn(sendTradeChat) end
                 end
             elseif en == "Ended" then
                 inTradeSession = false
@@ -3111,19 +3115,20 @@ sendTowerHook = function(url, towerName, floor0, floorN, drops, bonus, result)
     end
     return postWebhook(url, { username = "Anime Dice - Perfectus", embeds = embeds })
 end
-local function sendTradeChat()
+sendTradeChat = function()
     local raw = tostring(F.tradeChatMsg or "")
     if raw:gsub("%s", "") == "" then return end
     local ch = nil
     pcall(function()
         ch = game:GetService("TextChatService").TextChannels.RBXGeneral
     end)
-    if not ch then return end
+    if not ch then clog("Trade chat: channel missing.") return end
     for part in raw:gmatch("[^,]+") do
-        if not F.tradeAuto or not Alive then return end
+        if not Alive then return end
         local msg = part:gsub("^%s+", ""):gsub("%s+$", "")
         if msg ~= "" then
-            pcall(function() ch:SendAsync(msg) end)
+            local ok, err = pcall(function() ch:SendAsync(msg) end)
+            if ok then clog("Trade chat: " .. msg) else clog("Trade chat failed: " .. tostring(err)) end
             task.wait(2)
         end
     end
@@ -3149,7 +3154,6 @@ local function tradePlayer(plr)
             -- TradeEvent listener (covers manual trades too); here just flow control.
             -- Accepted trades get 45s to finish, then we cancel and move to the next player.
             tradeActive = true
-            if F.tradeChatOn then task.spawn(sendTradeChat) end
             tradeEvt.data = nil
             local endEv = waitTradeEvent({ Ended = true }, 45)
             if endEv == nil and F.tradeAuto and Alive then
@@ -3242,6 +3246,21 @@ local function applyLoaded(data)
                 else
                     F[k] = v
                 end
+            end
+        end
+    end
+    local sS = data.S
+    if type(sS) == "table" then
+        for k, v in pairs(sS) do
+            if type(Stats[k]) == "number" and type(v) == "number" then
+                Stats[k] = v
+            elseif type(Stats[k]) == "table" and type(v) == "table" then
+                local clean, okMap = {}, true
+                for mk, mv in pairs(v) do
+                    if type(mk) ~= "string" or type(mv) ~= "number" then okMap = false break end
+                    clean[mk] = mv
+                end
+                if okMap then Stats[k] = clean end
             end
         end
     end
