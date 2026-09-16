@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 47
+local BUILD = 48
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -124,7 +124,7 @@ task.spawn(function()
     end)
 end)
 local Busy = { place = false, tower = false, dice = false, potion = false, grade = false, trait = false, trade = false }
-local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, potions = 0, tradesSent = 0, tradesOpened = 0 }
+local Stats = { collectedMoney = 0, leveled = 0, upgraded = 0, rebirthed = 0, sold = 0, rolls = 0, towerWins = {}, towerFloors = 0, towerRewards = {}, towerGems = 0, towerTraits = 0, potions = 0, tradesSent = 0, tradesOpened = 0 }
 local doInstantSell, doPotionTick, doClaimQuests, doGradeTick, doTraitTick, doRedeemCodes, sendTradeChat -- forward declarations (defined below)
 local clog -- forward: assigned in Stats section; lets early code log to the in-game console safely via pcall
 
@@ -1484,6 +1484,24 @@ end })
 U.towerStat = tTower:CreateStat({ name = "Tower Wins", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
 U.floorStat = tTower:CreateStat({ name = "Tower Steps", value = 0, icon = "rbxassetid://112002461760953", changeMode = "absolute" })
 U.floorNowStat = tTower:CreateStat({ name = "Tower Floor", value = 0, icon = "rbxassetid://95008289608947", changeMode = "absolute" })
+tTower:CreateDivider({ text = "Tower Rewards" })
+U.towerGemStat = tTower:CreateStat({ name = "Tower Gems", value = 0, icon = "rbxassetid://99406696477560", changeMode = "absolute" })
+U.towerTraitStat = tTower:CreateStat({ name = "Tower Traits", value = 0, icon = "rbxassetid://133531024200552", changeMode = "absolute" })
+tTower:CreateButton({ name = "Reset Tower Stats", callback = function()
+    Stats.towerWins = {}
+    Stats.towerFloors = 0
+    Stats.towerRewards = {}
+    Stats.towerGems = 0
+    Stats.towerTraits = 0
+    pcall(function()
+        setStat(U.towerStat, 0)
+        setStat(U.floorStat, 0)
+        setStat(U.towerGemStat, 0)
+        setStat(U.towerTraitStat, 0)
+    end)
+    pcall(saveNow)
+    notify("Tower", "Tower stats reset.")
+end })
 
 -- ---- Potion ----
 tPotion:CreateDivider({ text = "Auto Potion" })
@@ -2322,7 +2340,10 @@ end
 
 local function towerRewardsAdd(rewards)
     for name, amt in pairs(rewards or {}) do
-        Stats.towerRewards[name] = (Stats.towerRewards[name] or 0) + (tonumber(amt) or 0)
+        amt = tonumber(amt) or 0
+        Stats.towerRewards[name] = (Stats.towerRewards[name] or 0) + amt
+        if name == "Gems" then Stats.towerGems = (Stats.towerGems or 0) + amt
+        elseif name == "Trait Reroll" then Stats.towerTraits = (Stats.towerTraits or 0) + amt end
     end
 end
 local lastTowerFloor = 1
@@ -2336,6 +2357,7 @@ local function handleTowerSeq(seq, saw)
                 lastTowerFloor = tonumber(act.floor)
                 if lastTowerFloor % 10 == 0 then clog("Tower floor " .. lastTowerFloor) end
             elseif act.action == "floorCompleted" and type(act.rewards) == "table" then
+                towerRewardsAdd(act.rewards)
                 for rn, ra in pairs(act.rewards) do
                     towerRunDrops[rn] = (towerRunDrops[rn] or 0) + (tonumber(ra) or 0)
                 end
@@ -3392,6 +3414,12 @@ local function applyLoaded(data)
             end
         end
     end
+    if (tonumber(Stats.towerGems) or 0) == 0 and type(Stats.towerRewards) == "table" then
+        Stats.towerGems = tonumber(Stats.towerRewards["Gems"]) or 0
+    end
+    if (tonumber(Stats.towerTraits) or 0) == 0 and type(Stats.towerRewards) == "table" then
+        Stats.towerTraits = tonumber(Stats.towerRewards["Trait Reroll"]) or 0
+    end
     if U.sellInput then
         local tt = (type(data.thresholdText) == "string") and data.thresholdText or ""
         pcall(function() U.sellInput:Set(tt, true) end)
@@ -3599,6 +3627,8 @@ task.spawn(function()
             setStat(U.towerStat, Stats.towerWins[F.towerName] or 0)
             setStat(U.floorStat, Stats.towerFloors)
             setStat(U.floorNowStat, lastTowerFloor)
+            setStat(U.towerGemStat, Stats.towerGems or 0)
+            setStat(U.towerTraitStat, Stats.towerTraits or 0)
             setStat(U.moneyStat, money())
             setStat(U.rollStat, rolls())
             setStat(U.soldStat, Stats.sold)
