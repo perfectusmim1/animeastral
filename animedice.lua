@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 45
+local BUILD = 46
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -812,6 +812,37 @@ local function doRejoin(sameServer)
         end
     end)
 end
+local VISIT_TTL = 1800
+local function visitedPath() return CFG_FOLDER .. "/visited_" .. tostring(LocalPlayer.UserId) .. ".json" end
+local function loadVisited()
+    local t = {}
+    if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return t end
+    local path = existingPath(visitedPath(), CFG_FOLDER_OLD .. "/visited_" .. tostring(LocalPlayer.UserId) .. ".json")
+    if not path then return t end
+    local okR, txt = pcall(readfile, path)
+    if not okR then return t end
+    local okD, d = pcall(function() return HTS:JSONDecode(txt) end)
+    if not (okD and type(d) == "table") then return t end
+    local now = os.time()
+    for job, ts in pairs(d) do
+        ts = tonumber(ts)
+        if type(job) == "string" and ts and now - ts < VISIT_TTL then t[job] = ts end
+    end
+    return t
+end
+local function saveVisited(t)
+    if typeof(writefile) ~= "function" then return end
+    pcall(function() makefolder(CFG_FOLDER) end)
+    local arr = {}
+    for job, ts in pairs(t) do table.insert(arr, { job = job, ts = ts }) end
+    if #arr > 200 then
+        table.sort(arr, function(a, b) return a.ts > b.ts end)
+        local kept = {}
+        for i = 1, 200 do kept[arr[i].job] = arr[i].ts end
+        t = kept
+    end
+    pcall(function() writefile(visitedPath(), HTS:JSONEncode(t)) end)
+end
 local lastHopAt = 0
 local function doHop(lowPop, isBlocked)
     task.spawn(function()
@@ -822,17 +853,18 @@ local function doHop(lowPop, isBlocked)
         end
         lastHopAt = os.clock()
         notify("Server Hop", "Searching servers...")
+        local visited = loadVisited()
         local cands, cursor, pages = {}, nil, 0
+        local order = lowPop and "Asc" or "Desc"
         while pages < 3 do
-            -- NOTE: this endpoint expects the PLACE id, not the universe/GameId
-            local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true"
+            local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=" .. order .. "&limit=100&excludeFullGames=true"
             if cursor then url = url .. "&cursor=" .. cursor end
             local ok, res = pcall(function() return game:HttpGet(url) end)
             if not ok then break end
             local ok2, data = pcall(function() return HTS:JSONDecode(res) end)
             if not (ok2 and data and data.data) then break end
             for _, s in ipairs(data.data) do
-                if s.id ~= game.JobId and (tonumber(s.playing) or 0) < (tonumber(s.maxPlayers) or 99) then
+                if s.id ~= game.JobId and not visited[s.id] and (tonumber(s.playing) or 0) < (tonumber(s.maxPlayers) or 99) then
                     table.insert(cands, s)
                 end
             end
@@ -845,12 +877,35 @@ local function doHop(lowPop, isBlocked)
             return
         end
         if #cands == 0 then
+            local oldest, oldestT = nil, nil
+            for job, ts in pairs(visited) do
+                if job ~= game.JobId and (not oldestT or ts < oldestT) then oldest, oldestT = job, ts end
+            end
+            if oldest then
+                visited[game.JobId] = os.time()
+                visited[oldest] = os.time()
+                saveVisited(visited)
+                notify("Server Hop", "All recent visited, returning to oldest...")
+                pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, oldest, LocalPlayer) end)
+                return
+            end
             notify("Server Hop", "List empty, hopping random...")
+            visited[game.JobId] = os.time()
+            saveVisited(visited)
             pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
             return
         end
-        if lowPop then table.sort(cands, function(a, b) return (a.playing or 0) < (b.playing or 0) end) end
-        local pick = lowPop and cands[1] or cands[math.random(1, #cands)]
+        local pick
+        if lowPop then
+            table.sort(cands, function(a, b) return (a.playing or 0) < (b.playing or 0) end)
+            pick = cands[1]
+        else
+            table.sort(cands, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
+            pick = cands[math.random(1, math.min(5, #cands))]
+        end
+        visited[game.JobId] = os.time()
+        visited[pick.id] = os.time()
+        saveVisited(visited)
         notify("Server Hop", "Teleporting (" .. tostring(pick.playing) .. " players)...")
         pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, pick.id, LocalPlayer) end)
     end)
