@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 51
+local BUILD = 52
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -1790,8 +1790,6 @@ tStats:CreateButton({ name = "Reset Growth Stats", callback = function()
     pcall(function() U.moneyStat:ResetBaseline() end)
     pcall(function() U.rollStat:ResetBaseline() end)
 end })
-tStats:CreateKeybind({ name = "Menu Key", value = Enum.KeyCode.RightShift,
-    callback = function() pcall(function() window:ToggleHide() end) end })
 tStats:CreateButton({ name = "Close Menu (Unload)", callback = function()
     pcall(adhShutdown)
     F.tower = false
@@ -1809,7 +1807,7 @@ U.saveSettings = tSettings:CreateToggle({ name = "Auto Save Settings", value = t
         F.saveSettings = v
         if v then pcall(saveNow) end
     end })
-U.autoMinimize = tSettings:CreateToggle({ name = "Auto Minimize UI", description = "Automatically minimizes the menu shortly after load. Press Menu Key to show it again.",
+U.autoMinimize = tSettings:CreateToggle({ name = "Auto Minimize UI", description = "Automatically minimizes the menu shortly after load.",
     value = false,
     callback = function(v)
         F.autoMinimize = v
