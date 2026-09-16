@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 46
+local BUILD = 47
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -505,7 +505,9 @@ afkConn = LocalPlayer.Idled:Connect(function()
         vu:ClickButton2(Vector2.new())
     end) end
 end)
+local hopBusy = false
 TS.TeleportInitFailed:Connect(function(_, _, msg)
+    if hopBusy then return end
     notify("Teleport", "Failed: " .. tostring(msg))
 end)
 -- ---- FPS Boost (toggleable, saved in config, re-applied on load) ----
@@ -881,33 +883,101 @@ local function doHop(lowPop, isBlocked)
             for job, ts in pairs(visited) do
                 if job ~= game.JobId and (not oldestT or ts < oldestT) then oldest, oldestT = job, ts end
             end
+            hopBusy = true
+            local myJob = game.JobId
+            local failMsg, pending = nil, false
+            local failConn = TS.TeleportInitFailed:Connect(function(plr, result, msg)
+                if plr == LocalPlayer then
+                    pending = false
+                    failMsg = tostring((msg and msg ~= "") and msg or result)
+                end
+            end)
+            local function tryInstance(job)
+                if game.JobId ~= myJob then return true end
+                failMsg, pending = nil, true
+                local ok, err = pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, job, LocalPlayer) end)
+                if not ok then
+                    pending = false
+                    return false, tostring(err)
+                end
+                local t = 0
+                while t < 10 and pending and game.JobId == myJob do task.wait(1) t += 1 end
+                if game.JobId ~= myJob then return true end
+                if pending then pending = false return true end
+                return false, (failMsg or "unknown")
+            end
             if oldest then
-                visited[game.JobId] = os.time()
+                visited[myJob] = os.time()
                 visited[oldest] = os.time()
                 saveVisited(visited)
                 notify("Server Hop", "All recent visited, returning to oldest...")
-                pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, oldest, LocalPlayer) end)
+                local ok, err = tryInstance(oldest)
+                failConn:Disconnect()
+                hopBusy = false
+                if not ok then
+                    notify("Server Hop", "Oldest failed (" .. tostring(err) .. "), hopping random...")
+                    pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
+                end
                 return
             end
             notify("Server Hop", "List empty, hopping random...")
-            visited[game.JobId] = os.time()
+            visited[myJob] = os.time()
             saveVisited(visited)
+            failConn:Disconnect()
+            hopBusy = false
             pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
             return
         end
-        local pick
         if lowPop then
             table.sort(cands, function(a, b) return (a.playing or 0) < (b.playing or 0) end)
-            pick = cands[1]
         else
             table.sort(cands, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
-            pick = cands[math.random(1, math.min(5, #cands))]
         end
-        visited[game.JobId] = os.time()
-        visited[pick.id] = os.time()
-        saveVisited(visited)
-        notify("Server Hop", "Teleporting (" .. tostring(pick.playing) .. " players)...")
-        pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, pick.id, LocalPlayer) end)
+        hopBusy = true
+        local myJob2 = game.JobId
+        local failMsg2, pending2 = nil, false
+        local failConn2 = TS.TeleportInitFailed:Connect(function(plr, result, msg)
+            if plr == LocalPlayer then
+                pending2 = false
+                failMsg2 = tostring((msg and msg ~= "") and msg or result)
+            end
+        end)
+        visited[myJob2] = os.time()
+        local tries = math.min(5, #cands)
+        for i = 1, tries do
+            if type(isBlocked) == "function" and isBlocked() then
+                failConn2:Disconnect()
+                hopBusy = false
+                notify("Server Hop", "Trade open, hop cancelled.")
+                return
+            end
+            local s = cands[i]
+            visited[s.id] = os.time()
+            saveVisited(visited)
+            notify("Server Hop", "Teleporting (" .. tostring(s.playing) .. " players)...")
+            failMsg2, pending2 = nil, true
+            local ok, err = pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, s.id, LocalPlayer) end)
+            local ferr = nil
+            if ok then
+                local t = 0
+                while t < 10 and pending2 and game.JobId == myJob2 do task.wait(1) t += 1 end
+                if game.JobId ~= myJob2 or pending2 then
+                    pending2 = false
+                    failConn2:Disconnect()
+                    hopBusy = false
+                    return
+                end
+                ferr = failMsg2 or "unknown"
+            else
+                pending2 = false
+                ferr = tostring(err)
+            end
+            notify("Server Hop", "Attempt " .. i .. "/" .. tries .. " failed (" .. tostring(ferr) .. "), trying next...")
+        end
+        failConn2:Disconnect()
+        hopBusy = false
+        notify("Server Hop", "All tries failed, hopping random...")
+        pcall(function() TS:Teleport(game.PlaceId, LocalPlayer) end)
     end)
 end
 local autoexecArmed = false
