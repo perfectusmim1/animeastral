@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 48
+local BUILD = 50
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -515,7 +515,7 @@ end)
 -- map strip: Leaderboards, BestRoll podium + side statues, Towers tower,
 -- other players' plots/bodies and decor meshes. Hidden instances are kept
 -- alive under nil (not destroyed) so toggling OFF restores everything.
-local fpsRestore, fpsHidden, fpsMaintConn, fpsMaintConn2, fpsKeptPlot = {}, {}, nil, nil, nil
+local fpsRestore, fpsHidden, fpsMaintConn, fpsKeptPlot = {}, {}, nil, nil
 local function fpsDisable(inst)
     pcall(function()
         if inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
@@ -658,22 +658,24 @@ local function applyAnimeDiceStrip()
             end
         end
     end)
-    -- rotating gamepass promos on the right (Double Roll / Jackpot Roll HUD popups).
-    -- Shop menu itself stays untouched, buying still works from the Shop button.
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local root = pg and pg:FindFirstChild("Root")
-        local hud = root and root:FindFirstChild("HUD")
-        local pd = hud and hud:FindFirstChild("ProductDisplay")
-        if pd then fpsHide(pd) end
-    end)
 end
 local function fpsSweep(root)
     for _, o in ipairs(root:GetDescendants()) do fpsDisable(o) end
 end
 local function applyFpsBoost(on)
     if on then
-        -- mirror into the game's own Performance toggle
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local hud = pg and pg:FindFirstChild("Root") and pg.Root:FindFirstChild("HUD")
+            if hud and typeof(getnilinstances) == "function" then
+                for _, o in ipairs(getnilinstances()) do
+                    if o.Name == "ProductDisplay" and o:IsA("GuiObject") then
+                        o.Parent = hud
+                        break
+                    end
+                end
+            end
+        end)
         pcall(function()
             local s = getSig("SettingsService", "SetSetting")
             if s then s:Fire("Performance", true) end
@@ -727,20 +729,11 @@ local function applyFpsBoost(on)
                 end)
             end)
         end
-        if not fpsMaintConn2 then
-            pcall(function()
-                fpsMaintConn2 = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(o)
-                    if not F.fpsOn then return end
-                    if o.Name == "ProductDisplay" then fpsHide(o) end
-                end)
-            end)
-        end
         task.delay(8, function() if F.fpsOn then fpsSweep(workspace) applyAnimeDiceStrip() end end)
-        notify("Performance", "FPS Boost ON: leaderboards/statues/tower/other bases/promos hidden + shadows/particles/textures off.")
+        notify("Performance", "FPS Boost ON: leaderboards/statues/tower/other bases hidden + shadows/particles/textures off.")
     else
-        local wasActive = (fpsMaintConn ~= nil) or (fpsMaintConn2 ~= nil) or (#fpsRestore > 0) or (#fpsHidden > 0)
+        local wasActive = (fpsMaintConn ~= nil) or (#fpsRestore > 0) or (#fpsHidden > 0)
         if fpsMaintConn then fpsMaintConn:Disconnect() fpsMaintConn = nil end
-        if fpsMaintConn2 then fpsMaintConn2:Disconnect() fpsMaintConn2 = nil end
         for i = #fpsHidden, 1, -1 do
             local h = fpsHidden[i]
             pcall(function() h.o.Parent = h.parent end)
@@ -1843,7 +1836,7 @@ U.noclip = tSettings:CreateToggle({ name = "Noclip", value = false,
 U.afk = tSettings:CreateToggle({ name = "Anti-AFK", value = true,
     callback = function(v) F.afk = v end })
 tSettings:CreateDivider({ text = "Performance" })
-U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Hides leaderboards, Best Roll podium + side statues, Towers building, other players/bases, outer islands, all trees/rocks/clovers/decor and the rotating gamepass promos (lobby, stalls, yours + Shop stay). Plus shadows/particles/mesh-textures/lights/postfx off, render quality lowered. FPS cap is never touched. Saved and re-applied on rejoin.",
+U.fpsOn = tSettings:CreateToggle({ name = "FPS Boost", description = "Hides leaderboards, Best Roll podium + side statues, Towers building, other players/bases, outer islands, all trees/rocks/clovers/decor (lobby, stalls, yours + Shop stay). Plus shadows/particles/mesh-textures/lights/postfx off, render quality lowered. FPS cap is never touched. Saved and re-applied on rejoin.",
     value = false, callback = function(v) F.fpsOn = v applyFpsBoost(v) end })
 tSettings:CreateDivider({ text = "Rayfield Configs" })
 local cfgDrop
@@ -2908,6 +2901,7 @@ local function doTraitTick(manual)
     Busy.trait = false
 end
 
+local DEFAULT_CODES = { "RELEASE", "UPDATE1", "UPDATE2", "UPDATE3", "UPDATE4", "1KCCU", "5KCCU", "10KCCU", "20KCCU", "30KCCU", "40KCCU", "100KLIKES" }
 doRedeemCodes = function(manual)
     local sig = getSig("MonetizationService", "RedeemCode")
     if not sig then if manual then notify("Codes", "Redeem remote missing.") end return end
