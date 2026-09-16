@@ -90,7 +90,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 50
+local BUILD = 51
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -2358,7 +2358,6 @@ local function handleTowerSeq(seq, saw)
                 done = true
                 local hasRewards = act.rewards and next(act.rewards)
                 if hasRewards then
-                    towerRewardsAdd(act.rewards)
                     local parts = {}
                     for rn, ra in pairs(act.rewards) do table.insert(parts, ra .. "x " .. rn) end
                     clog("Tower ended: " .. table.concat(parts, ", "))
