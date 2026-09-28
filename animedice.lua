@@ -8,13 +8,51 @@ local AUTOEXEC_CODE = [[loadstring(game:HttpGet("https://raw.githubusercontent.c
 if game.PlaceId ~= 113290951185459 then
     error("[Anime Dice - Perfectus] This script only works in Anime Dice.", 0)
 end
+
+-- ---- EARLY BOOT GUARDS (needed by Auto Execute On Teleport) ----
+-- queue_on_teleport runs this chunk at the very start of the new client, before the
+-- client finished loading: Players.LocalPlayer/PlayerGui may not exist yet (reading
+-- LocalPlayer once up top left it nil forever, and the first use of it - the
+-- CharacterAdded connect - then died with "attempt to index nil with
+-- 'CharacterAdded'", killing the whole chunk) and ReplicatedStorage may still be
+-- replicating. Wait (bounded) for the client, same idea as the Auto Dungeon build.
+if not game:IsLoaded() then
+    local t0 = os.clock()
+    while not game:IsLoaded() and os.clock() - t0 < 30 do
+        task.wait(0.2)
+    end
+end
+if LocalPlayer == nil then
+    local t0 = os.clock()
+    while LocalPlayer == nil and os.clock() - t0 < 30 do
+        task.wait(0.2)
+        pcall(function() LocalPlayer = Players.LocalPlayer end)
+    end
+end
+if LocalPlayer == nil then
+    error("[Anime Dice - Perfectus] Client still booting (no LocalPlayer yet). Re-execute in a moment.", 0)
+end
+-- Rayfield builds its ScreenGui inside PlayerGui: without it the UI step fails.
+if not LocalPlayer:FindFirstChildOfClass("PlayerGui") then
+    local t0 = os.clock()
+    while not LocalPlayer:FindFirstChildOfClass("PlayerGui") and os.clock() - t0 < 20 do
+        task.wait(0.2)
+    end
+end
+
 do
     local blocked = false
     pcall(function()
         if typeof(getgenv) == "function" then
             local h = getgenv().ADH_Heartbeat
-            if type(h) == "table" and (os.clock() - (tonumber(h.t) or 0)) < 6 then
-                blocked = true
+            if type(h) == "table" then
+                local dt = os.clock() - (tonumber(h.t) or 0)
+                -- os.clock() restarts near 0 in a brand new client, so a heartbeat left
+                -- behind by the previous server must never read as "recent" (dt >= 0);
+                -- the job tag stops a same-server rejoin from matching that old run too.
+                if dt >= 0 and dt < 6 and (h.job == nil or h.job == game.JobId) then
+                    blocked = true
+                end
             end
         end
     end)
@@ -28,7 +66,7 @@ do
 end
 pcall(function()
     if typeof(getgenv) == "function" then
-        getgenv().ADH_Heartbeat = { t = os.clock() }
+        getgenv().ADH_Heartbeat = { t = os.clock(), job = game.JobId }
     end
 end)
 local Rayfield
@@ -90,7 +128,7 @@ local F = {
     saveSettings = true, autoMinimize = false, wsOn = false, wsValue = 16, flyOn = false, flySpeed = 50, noclip = false, afk = true, reexec = true, fpsOn = false,
 }
 -- Bump BUILD on every edit so the running version is always identifiable (Loaded notify + Log).
-local BUILD = 52
+local BUILD = 53
 local Alive = true
 local loadingCfg = false -- true while applyLoaded restores toggles (blocks restore-time side effects)
 -- Rayfield ignores Hide()/ToggleHide() while window.animating (long staggered intro
@@ -116,7 +154,7 @@ local adhShutdown
 task.spawn(function()
     if typeof(getgenv) ~= "function" then return end
     while Alive do
-        pcall(function() getgenv().ADH_Heartbeat = { t = os.clock() } end)
+        pcall(function() getgenv().ADH_Heartbeat = { t = os.clock(), job = game.JobId } end)
         task.wait(2)
     end
     pcall(function()
@@ -130,6 +168,19 @@ local clog -- forward: assigned in Stats section; lets early code log to the in-
 
 -- ============ GAME REFS (safe resolution) ============
 local G = { ok = false, missing = {} }
+-- Auto Execute On Teleport can beat ReplicatedStorage replication: give the game's
+-- modules a moment to arrive, or every need() below fails once and stays broken for
+-- the rest of the session (all features dead after a rejoin). No-op in a normal run.
+do
+    local t0 = os.clock()
+    while os.clock() - t0 < 30 do
+        local ok, ready = pcall(function()
+            return RS:FindFirstChild("Packages") ~= nil and RS:FindFirstChild("Framework") ~= nil
+        end)
+        if ok and ready then break end
+        task.wait(0.5)
+    end
+end
 local function need(name, fn)
     local ok, v = pcall(fn)
     if ok and v ~= nil then G[name] = v return v end
@@ -1709,7 +1760,8 @@ tChanges:CreateText({
     name = '<b><font color="#60a5fa">v1.6 - Game-specific FPS Boost</font></b>',
     icon = "rbxassetid://112634880544308",
     text = [[<font color="#4ade80">•</font> FPS Boost now hides map junk: leaderboards, Best Roll podium + side statues, Towers building, other players/bases and decor meshes (yours stay, OFF restores all)
-<font color="#4ade80">•</font> Mesh textures stripped + flattened to SmoothPlastic on top of the existing shadows/particles/lights/postfx pass]]
+<font color="#4ade80">•</font> Mesh textures stripped + flattened to SmoothPlastic on top of the existing shadows/particles/lights/postfx pass
+<font color="#4ade80">•</font> Auto Execute On Teleport fixed: no more "index nil with 'CharacterAdded'" crash on rejoin - the script now waits for the client (game loaded, LocalPlayer/PlayerGui, game modules) while the new server is still booting]]
 })
 
 tChanges:CreateText({
