@@ -1,1 +1,2064 @@
-.
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local WS = game:GetService("Workspace")
+local TS = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local VU = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
+local LP = Players.LocalPlayer
+local Remotes = RS:WaitForChild("Remotes")
+local Modules = RS:WaitForChild("Modules")
+local CollectYang = Remotes:WaitForChild("CollectYang")
+local UpgradeRequest = Remotes:WaitForChild("UpgradeRequest")
+local UpgradeTreeRequest = Remotes:WaitForChild("UpgradeTreeRequest")
+local RollRuneEvent = Remotes:WaitForChild("RollRuneEvent")
+local Cultivate = Remotes:WaitForChild("Cultivate")
+local FishCatchEvent = Remotes:WaitForChild("FishCatchEvent")
+local SellFishEvent = Remotes:WaitForChild("SellFishEvent")
+local MergeEvent = Remotes:WaitForChild("MergeEvent")
+local BottleClickEvent = Remotes:WaitForChild("BottleClickEvent")
+local BottleTierRequest = Remotes:WaitForChild("BottleTierRequest")
+local TierRequest = Remotes:WaitForChild("TierRequest")
+local FisherRankRequest = Remotes:WaitForChild("FisherRankRequest")
+local BuyRodEvent = Remotes:WaitForChild("BuyRodEvent")
+local EquipRodEvent = Remotes:WaitForChild("EquipRodEvent")
+local RebornRequest = Remotes:WaitForChild("RebornRequest")
+local RebirthRequest = Remotes:WaitForChild("RebirthRequest")
+local TokenUpgradeRequest = Remotes:WaitForChild("TokenUpgradeRequest")
+local YinYangSchedule = require(Modules:WaitForChild("YinYangSchedule"))
+local RuneData = require(Modules:WaitForChild("RuneData"))
+local UpgradeConfig = require(Modules:WaitForChild("UpgradeConfig"))
+local TokenUpgradeConfig = require(Modules:WaitForChild("TokenUpgradeConfig"))
+local RodsData = require(Modules:WaitForChild("RodsData"))
+local OmegaNum = require(Modules:WaitForChild("OmegaNum"))
+local RebornConfig = require(Modules:WaitForChild("RebornConfig"))
+local RebirthConfig = require(Modules:WaitForChild("RebirthConfig"))
+local TycoonConfig = require(Modules:WaitForChild("TycoonConfig"))
+local AUTOEXEC_URL = "https://raw.githubusercontent.com/perfectusmim1/animeastral/refs/heads/main/runeinc2"
+local function queueAutoExec(on)
+	pcall(function()
+		if on == false then
+			local c = clear_teleport_queue or clearqueueonteleport
+			if c then c() end
+			return
+		end
+		local q = queue_on_teleport or queueonteleport or queue_on_tp or queueontp
+		if q then q('loadstring(game:HttpGet("' .. AUTOEXEC_URL .. '"))()') end
+	end)
+end
+local YSP = WS:WaitForChild("YangSpawnPoint")
+local MAGNET_RANGE = 550
+local DELAY = {
+	fish = 0.03,
+	sell = 0.5,
+	merge = 0.1,
+	bottle = 0.1,
+	upgrade = 0.1,
+	token = 0.1,
+	tier = 0.5,
+	rank = 0.5,
+	rod = 1,
+	rune = 1,
+	reborn = 5,
+	rebirth = 5,
+	tycoon = 1,
+	cultivate = 0.05,
+	mob = 0.3,
+}
+local ROLL_MODE = "MAX"
+local RUNE_POOLS = {}
+do
+	local seen = {}
+	for _, pool in ipairs(WS:WaitForChild("Runes"):GetChildren()) do
+		if RuneData[pool.Name] and pool:FindFirstChild("Hitbox") and not seen[pool.Name] then
+			seen[pool.Name] = true
+			table.insert(RUNE_POOLS, pool.Name)
+		end
+	end
+	if #RUNE_POOLS == 0 then
+		RUNE_POOLS = {
+			"BasicRune", "EssentialRune", "DesertRune", "MagmaRune", "EventRune", "EventRune2",
+			"SpaceRune", "OceanRune", "TokenRune", "DropperRune", "YinRune", "YangRune",
+		}
+	end
+end
+local DEFAULT_RUNE = RUNE_POOLS[1] or "BasicRune"
+local function upgradesFor(costStat)
+	local list = {}
+	for k, v in pairs(UpgradeConfig.Upgrades or {}) do
+		if v.CostStat == costStat then table.insert(list, k) end
+	end
+	table.sort(list)
+	return list
+end
+local COINS_UP = upgradesFor("Coins")
+local CASH_UP = upgradesFor("Cash")
+local LEVEL_UP = upgradesFor("LevelPoints")
+local BOTTLES_UP = upgradesFor("Bottles")
+local BONES_UP = upgradesFor("Fishbones")
+local YANG_UPGRADES = { "Upgrade97", "Upgrade101", "Upgrade102" }
+local YIN_UPGRADES = { "Upgrade98", "Upgrade99", "Upgrade100" }
+local YANG_TREE, YIN_TREE = {}, {}
+for i = 60, 79 do table.insert(YANG_TREE, "Upgrade" .. i) end
+for i = 80, 99 do table.insert(YIN_TREE, "Upgrade" .. i) end
+local old = LP.PlayerGui:FindFirstChild("YangAutoGui")
+if old then old:Destroy() end
+if getgenv().YangAutoId then getgenv().YangAutoId += 1 else getgenv().YangAutoId = 1 end
+local myId = getgenv().YangAutoId
+local function alive() return myId == getgenv().YangAutoId end
+local function hrp()
+	local c = LP.Character
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function bases()
+	local t = {}
+	for _, sp in ipairs(YSP:GetChildren()) do
+		if sp:IsA("BasePart") then
+			table.insert(t, (sp.CFrame * CFrame.new(0, -2.5, 0)).Position)
+		end
+	end
+	return t
+end
+local function tw(obj, t, style, dir, props)
+	local a = TS:Create(obj, TweenInfo.new(t, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), props)
+	a:Play()
+	return a
+end
+local APPLE_GREEN = Color3.fromRGB(48, 209, 88)
+local TRACK_OFF = Color3.fromRGB(110, 110, 118)
+local TEXT_MAIN = Color3.fromRGB(235, 235, 240)
+local TEXT_DIM = Color3.fromRGB(150, 150, 158)
+local TEXT_MUTE = Color3.fromRGB(112, 112, 122)
+local F_TITLE = Enum.Font.SourceSansBold
+local F_LABEL = Enum.Font.SourceSansSemibold
+local F_SECTION = Enum.Font.SourceSansBold
+local F_BODY = Enum.Font.SourceSans
+local WIN_W, WIN_H = 460, 404
+local SIDE_W, TOP_H = 158, 48
+local TAB_ROW_H, TAB_ROW_GAP = 34, 5
+local CONFIG_PATH = "ScriptCreator/yang-auto-config.json"
+local ALL_TOGGLES = {}
+local autoSaveOn = false
+local markDirty = function() end
+local saveConfig = function() end
+local function loadConfig()
+	if not isfile or not isfile(CONFIG_PATH) then return nil end
+	local ok, raw = pcall(readfile, CONFIG_PATH)
+	if not ok or type(raw) ~= "string" or raw == "" then return nil end
+	local ok2, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+	if not ok2 or type(decoded) ~= "table" then return nil end
+	return decoded
+end
+local TOGGLE_KEY_BY_TEXT = {
+	["Magnet"] = "magnet",
+	["Auto Cultivation"] = "cultivate",
+	["Auto Yang Up"] = "yangUp",
+	["Auto Yin Up"] = "yinUp",
+	["Auto Rune"] = "autoRune",
+	["Auto Fish"] = "autoFish",
+	["Auto Sell Fish"] = "autoSell",
+	["Auto Merge Bones"] = "autoMerge",
+	["Auto Click Bottles"] = "autoBottle",
+	["Auto Coins Upgrades"] = "upCoins",
+	["Auto Tycoon Cash Upgrades"] = "upTycoonCash",
+	["Auto Tycoon Level Upgrades"] = "upTycoonLevel",
+	["Auto Tycoon Color"] = "autoTycoonColor",
+	["Auto Cash Upgrades"] = "upCash",
+	["Auto Bottles Upgrades"] = "upBottles",
+	["Auto Fishbones Upgrades"] = "upBones",
+	["Auto Token Upgrades"] = "upTokens",
+	["Auto Coin Tier"] = "autoCoinTier",
+	["Auto Bottle Tier"] = "autoBottleTier",
+	["Auto Fisher Rank"] = "autoRank",
+	["Auto Best Rod"] = "autoRods",
+	["Auto Reborn"] = "autoReborn",
+	["Auto Rebirth"] = "autoRebirth",
+	["Auto Tycoon Upgraders"] = "autoTycoonUp",
+	["Infinite Jump"] = "infJump",
+	["Noclip"] = "noclip",
+	["Anti-AFK"] = "antiAfk",
+	["Auto Execute on Teleport"] = "autoExec",
+}
+local animatables = {}
+local function track(o)
+	table.insert(animatables, o)
+	if o:GetAttribute("OrigTrans") == nil then o:SetAttribute("OrigTrans", o.BackgroundTransparency) end
+	return o
+end
+local function eachText(root, fn)
+	if root:IsA("TextLabel") or root:IsA("TextButton") then fn(root) end
+	for _, o in ipairs(root:GetDescendants()) do
+		if o:IsA("TextLabel") or o:IsA("TextButton") then fn(o) end
+	end
+end
+local CURVE_STEPS = 6
+local function cubicPts(x0, y0, x1, y1, x2, y2, x3, y3, out)
+	for t = 1, CURVE_STEPS do
+		local u = t / CURVE_STEPS
+		local m = 1 - u
+		out[#out + 1] = {
+			m * m * m * x0 + 3 * m * m * u * x1 + 3 * m * u * u * x2 + u * u * u * x3,
+			m * m * m * y0 + 3 * m * m * u * y1 + 3 * m * u * u * y2 + u * u * u * y3,
+		}
+	end
+end
+local function quadPts(x0, y0, x1, y1, x2, y2, out)
+	for t = 1, CURVE_STEPS do
+		local u = t / CURVE_STEPS
+		local m = 1 - u
+		out[#out + 1] = { m * m * x0 + 2 * m * u * x1 + u * u * x2, m * m * y0 + 2 * m * u * y1 + u * u * y2 }
+	end
+end
+local function arcPts(x0, y0, rx, ry, phiDeg, fa, fs, x1, y1, out)
+	rx, ry = math.abs(rx), math.abs(ry)
+	if rx == 0 or ry == 0 then
+		out[#out + 1] = { x1, y1 }
+		return
+	end
+	local phi = math.rad(phiDeg)
+	local cp, sp = math.cos(phi), math.sin(phi)
+	local dx2, dy2 = (x0 - x1) / 2, (y0 - y1) / 2
+	local xp = cp * dx2 + sp * dy2
+	local yp = -sp * dx2 + cp * dy2
+	local lam = (xp * xp) / (rx * rx) + (yp * yp) / (ry * ry)
+	if lam > 1 then
+		local s = math.sqrt(lam)
+		rx, ry = rx * s, ry * s
+	end
+	local num = rx * rx * ry * ry - rx * rx * yp * yp - ry * ry * xp * xp
+	local den = rx * rx * yp * yp + ry * ry * xp * xp
+	if den == 0 then
+		out[#out + 1] = { x1, y1 }
+		return
+	end
+	local co = math.sqrt(math.max(0, num / den))
+	if fa == fs then co = -co end
+	local cxp = co * rx * yp / ry
+	local cyp = -co * ry * xp / rx
+	local cx = cp * cxp - sp * cyp + (x0 + x1) / 2
+	local cy = sp * cxp + cp * cyp + (y0 + y1) / 2
+	local function ang(ux, uy, vx, vy)
+		local d = (ux * vx + uy * vy) / (math.sqrt(ux * ux + uy * uy) * math.sqrt(vx * vx + vy * vy))
+		local a = math.acos(math.clamp(d, -1, 1))
+		if ux * vy - uy * vx < 0 then a = -a end
+		return a
+	end
+	local ux, uy = (xp - cxp) / rx, (yp - cyp) / ry
+	local vx, vy = (-xp - cxp) / rx, (-yp - cyp) / ry
+	local th1 = ang(1, 0, ux, uy)
+	local dth = ang(ux, uy, vx, vy)
+	if not fs and dth > 0 then dth -= 2 * math.pi end
+	if fs and dth < 0 then dth += 2 * math.pi end
+	for t = 1, CURVE_STEPS do
+		local th = th1 + dth * (t / CURVE_STEPS)
+		out[#out + 1] = {
+			cx + rx * cp * math.cos(th) - ry * sp * math.sin(th),
+			cy + rx * sp * math.cos(th) + ry * cp * math.sin(th),
+		}
+	end
+end
+local function readNumbers(s)
+	local out = {}
+	local i, n = 1, #s
+	while i <= n do
+		local c = s:sub(i, i)
+		if c:match("[%s,]") then
+			i += 1
+		elseif c:match("[-+%.%d]") then
+			local st = i
+			if c == "-" or c == "+" then i += 1 end
+			while i <= n and s:sub(i, i):match("%d") do i += 1 end
+			if i <= n and s:sub(i, i) == "." then
+				i += 1
+				while i <= n and s:sub(i, i):match("%d") do i += 1 end
+			end
+			if i <= n and (s:sub(i, i) == "e" or s:sub(i, i) == "E") then
+				local save = i
+				i += 1
+				if i <= n and (s:sub(i, i) == "-" or s:sub(i, i) == "+") then i += 1 end
+				if i <= n and s:sub(i, i):match("%d") then
+					while i <= n and s:sub(i, i):match("%d") do i += 1 end
+				else
+					i = save
+				end
+			end
+			local v = tonumber(s:sub(st, i - 1))
+			if v then
+				out[#out + 1] = v
+			else
+				i = st + 1
+			end
+		else
+			i += 1
+		end
+	end
+	return out
+end
+local function parsePath(d)
+	local subs = {}
+	local cur = nil
+	local x, y, sx, sy = 0, 0, 0, 0
+	local cpx, cpy, qpx, qpy = nil, nil, nil, nil
+	local function open()
+		cur = {}
+		subs[#subs + 1] = cur
+	end
+	local function emit(px, py)
+		cur[#cur + 1] = { px, py }
+	end
+	for cmd, body in d:gmatch("([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)") do
+		local v = readNumbers(body)
+		local i = 0
+		local rel = cmd:match("%l") ~= nil
+		local C = cmd:upper()
+		if C == "M" then
+			local nx, ny = rel and x + v[1] or v[1], rel and y + v[2] or v[2]
+			open()
+			emit(nx, ny)
+			x, y = nx, ny
+		elseif C == "Z" then
+			open()
+			emit(sx, sy)
+		else
+			open()
+			emit(x, y)
+		end
+		sx, sy = x, y
+		cpx, cpy, qpx, qpy = nil, nil, nil, nil
+		while true do
+			i += 1
+			if C == "M" then
+				local j = 1
+				while true do
+					j += 1
+					local a, b = v[j * 2 - 1], v[j * 2]
+					if not a then break end
+					local nx, ny = rel and x + a or a, rel and y + b or b
+					emit(nx, ny)
+					x, y = nx, ny
+				end
+				break
+			elseif C == "L" then
+				local a, b = v[i * 2 - 1], v[i * 2]
+				if not a then break end
+				local nx, ny = rel and x + a or a, rel and y + b or b
+				emit(nx, ny)
+				x, y = nx, ny
+			elseif C == "H" then
+				local a = v[i]
+				if not a then break end
+				local nx = rel and x + a or a
+				emit(nx, y)
+				x = nx
+			elseif C == "V" then
+				local a = v[i]
+				if not a then break end
+				local ny = rel and y + a or a
+				emit(x, ny)
+				y = ny
+			elseif C == "C" then
+				local a, b, cc, dd, e, f2 = v[i * 6 - 5], v[i * 6 - 4], v[i * 6 - 3], v[i * 6 - 2], v[i * 6 - 1], v[i * 6]
+				if not a then break end
+				local x1, y1 = rel and x + a or a, rel and y + b or b
+				local x2, y2 = rel and x + cc or cc, rel and y + dd or dd
+				local x3, y3 = rel and x + e or e, rel and y + f2 or f2
+				cubicPts(x, y, x1, y1, x2, y2, x3, y3, cur)
+				cpx, cpy = x2, y2
+				x, y = x3, y3
+			elseif C == "S" then
+				local a, b, cc, dd = v[i * 4 - 3], v[i * 4 - 2], v[i * 4 - 1], v[i * 4]
+				if not a then break end
+				local x1, y1 = cpx and 2 * x - cpx or x, cpy and 2 * y - cpy or y
+				local x2, y2 = rel and x + a or a, rel and y + b or b
+				local x3, y3 = rel and x + cc or cc, rel and y + dd or dd
+				cubicPts(x, y, x1, y1, x2, y2, x3, y3, cur)
+				cpx, cpy = x2, y2
+				x, y = x3, y3
+			elseif C == "Q" then
+				local a, b, cc, dd = v[i * 4 - 3], v[i * 4 - 2], v[i * 4 - 1], v[i * 4]
+				if not a then break end
+				local x1, y1 = rel and x + a or a, rel and y + b or b
+				local x2, y2 = rel and x + cc or cc, rel and y + dd or dd
+				quadPts(x, y, x1, y1, x2, y2, cur)
+				qpx, qpy = x1, y1
+				x, y = x2, y2
+			elseif C == "T" then
+				local a, b = v[i * 2 - 1], v[i * 2]
+				if not a then break end
+				local x1, y1 = qpx and 2 * x - qpx or x, qpy and 2 * y - qpy or y
+				local nx, ny = rel and x + a or a, rel and y + b or b
+				quadPts(x, y, x1, y1, nx, ny, cur)
+				qpx, qpy = x1, y1
+				x, y = nx, ny
+			elseif C == "A" then
+				local b0 = (i - 1) * 7
+				local rx, ry, rot, fa, fs = v[b0 + 1], v[b0 + 2], v[b0 + 3], v[b0 + 4], v[b0 + 5]
+				local ex, ey = v[b0 + 6], v[b0 + 7]
+				if not rx then break end
+				local nx, ny = rel and x + ex or ex, rel and y + ey or ey
+				arcPts(x, y, rx, ry, rot, fa ~= 0, fs ~= 0, nx, ny, cur)
+				x, y = nx, ny
+			else
+				break
+			end
+		end
+		if C == "Z" then
+			x, y = sx, sy
+		end
+	end
+	return subs
+end
+local ICON_SIZE, ICON_STROKE = 19, 1.8
+local TAB_ICONS = {
+	Yang = {
+		{ t = "c", cx = 12, cy = 12, r = 4 },
+		{ t = "p", d = "M12 2v2" },
+		{ t = "p", d = "M12 20v2" },
+		{ t = "p", d = "m4.93 4.93 1.41 1.41" },
+		{ t = "p", d = "m17.66 17.66 1.41 1.41" },
+		{ t = "p", d = "M2 12h2" },
+		{ t = "p", d = "M20 12h2" },
+		{ t = "p", d = "m6.34 17.66-1.41 1.41" },
+		{ t = "p", d = "m19.07 4.93-1.41 1.41" },
+	},
+	Runes = {
+		{ t = "p", d = "M10.5 3 8 9l4 13 4-13-2.5-6" },
+		{ t = "p", d = "M17 3a2 2 0 0 1 1.6.8l3 4a2 2 0 0 1 .013 2.382l-7.99 10.986a2 2 0 0 1-3.247 0l-7.99-10.986A2 2 0 0 1 2.4 7.8l2.998-3.997A2 2 0 0 1 7 3z" },
+		{ t = "p", d = "M2 9h20" },
+	},
+	Fishing = {
+		{ t = "p", d = "M6.5 12c.94-3.46 4.94-6 8.5-6 3.56 0 6.06 2.54 7 6-.94 3.47-3.44 6-7 6s-7.56-2.53-8.5-6Z" },
+		{ t = "p", d = "M18 12v.5" },
+		{ t = "p", d = "M16 17.93a9.77 9.77 0 0 1 0-11.86" },
+		{ t = "p", d = "M7 10.67C7 8 5.58 5.97 2.73 5.5c-1 1.5-1 5 .23 6.5-1.24 1.5-1.24 5-.23 6.5C5.58 18.03 7 16 7 13.33" },
+		{ t = "p", d = "M10.46 7.26C10.2 5.88 9.17 4.24 8 3h5.8a2 2 0 0 1 1.98 1.67l.23 1.4" },
+		{ t = "p", d = "m16.01 17.93-.23 1.4A2 2 0 0 1 13.8 21H9.5a5.96 5.96 0 0 0 1.49-3.98" },
+	},
+	Upgrades = {
+		{ t = "p", d = "M16 7h6v6" },
+		{ t = "p", d = "m22 7-8.5 8.5-5-5L2 17" },
+	},
+	Player = {
+		{ t = "p", d = "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" },
+		{ t = "c", cx = 12, cy = 7, r = 4 },
+	},
+	Settings = {
+		{ t = "p", d = "M10 5H3" },
+		{ t = "p", d = "M12 19H3" },
+		{ t = "p", d = "M14 3v4" },
+		{ t = "p", d = "M16 17v4" },
+		{ t = "p", d = "M21 12h-9" },
+		{ t = "p", d = "M21 19h-5" },
+		{ t = "p", d = "M21 5h-7" },
+		{ t = "p", d = "M8 10v4" },
+		{ t = "p", d = "M8 12H3" },
+	},
+	Tycoon = {
+		{ t = "p", d = "M12 16h.01" },
+		{ t = "p", d = "M16 16h.01" },
+		{ t = "p", d = "M3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5a.5.5 0 0 0-.769-.422l-4.462 2.844A.5.5 0 0 1 15 10.5v-2a.5.5 0 0 0-.769-.422L9.77 10.922A.5.5 0 0 1 9 10.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" },
+		{ t = "p", d = "M8 16h.01" },
+	},
+}
+for _, shapes in pairs(TAB_ICONS) do
+	for _, sh in ipairs(shapes) do
+		if sh.t == "p" then sh.subs = parsePath(sh.d) end
+	end
+end
+local TAB_IMAGE = {
+	Yang = "rbxassetid://109400629195704",
+	Runes = "rbxassetid://135230701981041",
+	Fishing = "rbxassetid://120206964745776",
+	Upgrades = "rbxassetid://111563601910720",
+	Player = "rbxassetid://91888983158575",
+	Settings = "rbxassetid://73383022127495",
+	Tycoon = "rbxassetid://97438429579502",
+}
+local function makeIcon(parent, shapes, px, color, z)
+	local scale = px / 24
+	local w = ICON_STROKE
+	local box = Instance.new("Frame")
+	box.Name = "Icon"
+	box.BackgroundTransparency = 1
+	box.Size = UDim2.fromOffset(px, px)
+	box.ZIndex = z or 1
+	box.Parent = parent
+	for _, sh in ipairs(shapes) do
+		if sh.t == "c" then
+			local r = sh.r * scale
+			local f = Instance.new("Frame")
+			f.BackgroundTransparency = 1
+			f.AnchorPoint = Vector2.new(0.5, 0.5)
+			f.Position = UDim2.fromOffset(sh.cx * scale, sh.cy * scale)
+			f.Size = UDim2.fromOffset(r * 2, r * 2)
+			f.ZIndex = (z or 1) + 1
+			f.Parent = box
+			Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+			local s = Instance.new("UIStroke")
+			s.Thickness = w
+			s.Color = color
+			s.Transparency = 0
+			s.ZIndex = (z or 1) + 1
+			s.Parent = f
+		else
+			for _, pts in ipairs(sh.subs or {}) do
+				for k = 2, #pts do
+					local ax, ay = pts[k - 1][1] * scale, pts[k - 1][2] * scale
+					local bx, by = pts[k][1] * scale, pts[k][2] * scale
+					local dx, dy = bx - ax, by - ay
+					local len = math.sqrt(dx * dx + dy * dy)
+					if len > 0.04 then
+						local f = Instance.new("Frame")
+						f.BackgroundColor3 = color
+						f.BorderSizePixel = 0
+						f.AnchorPoint = Vector2.new(0.5, 0.5)
+						f.Size = UDim2.fromOffset(len + w, w)
+						f.Position = UDim2.fromOffset((ax + bx) / 2, (ay + by) / 2)
+						f.Rotation = math.deg(math.atan2(dy, dx))
+						f.ZIndex = (z or 1) + 1
+						f.Parent = box
+						Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+					end
+				end
+			end
+		end
+	end
+	return box
+end
+local function tintIcon(box, color, time)
+	for _, o in ipairs(box:GetDescendants()) do
+		if o:IsA("Frame") then
+			if time then tw(o, time, nil, nil, { BackgroundColor3 = color }) else o.BackgroundColor3 = color end
+		elseif o:IsA("UIStroke") then
+			if time then tw(o, time, nil, nil, { Color = color }) else o.Color = color end
+		end
+	end
+end
+local gui = Instance.new("ScreenGui")
+gui.Name = "YangAutoGui"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LP.PlayerGui
+local fr = Instance.new("Frame")
+fr.Size = UDim2.fromOffset(WIN_W, WIN_H)
+fr.Position = UDim2.fromOffset(20, 110)
+fr.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+fr.BackgroundTransparency = 1
+fr.Active = true
+fr.ClipsDescendants = true
+fr.Parent = gui
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 18)
+corner.Parent = fr
+local grad = Instance.new("UIGradient")
+grad.Color = ColorSequence.new(Color3.fromRGB(48, 48, 56), Color3.fromRGB(18, 18, 22))
+grad.Rotation = 90
+grad.Transparency = NumberSequence.new(0.04, 0.12)
+grad.Parent = fr
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(255, 255, 255)
+stroke.Transparency = 1
+stroke.Thickness = 1
+stroke.Parent = fr
+local fscale = Instance.new("UIScale")
+fscale.Scale = 0.85
+fscale.Parent = fr
+local side = Instance.new("Frame")
+side.Name = "Sidebar"
+side.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+side.BackgroundTransparency = 0.96
+side.BorderSizePixel = 0
+side.Size = UDim2.fromOffset(SIDE_W, WIN_H - TOP_H)
+side.Position = UDim2.fromOffset(0, TOP_H)
+side.Parent = fr
+track(side)
+local sideMask = Instance.new("Frame")
+sideMask.Size = UDim2.new(1, 0, 1, -18)
+sideMask.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sideMask.BackgroundTransparency = 1
+sideMask.BorderSizePixel = 0
+sideMask.Parent = side
+local sideMaskCorner = Instance.new("UICorner")
+sideMaskCorner.CornerRadius = UDim.new(0, 18)
+sideMaskCorner.Parent = sideMask
+local sideEdge = Instance.new("Frame")
+sideEdge.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sideEdge.Size = UDim2.fromOffset(1, 0, 1, -18)
+sideEdge.Position = UDim2.new(1, -1, 0, 0)
+sideEdge.BorderSizePixel = 0
+sideEdge.BackgroundTransparency = 0.9
+sideEdge.Parent = side
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.BackgroundTransparency = 1
+titleBar.BorderSizePixel = 0
+titleBar.Size = UDim2.fromOffset(WIN_W, TOP_H)
+titleBar.ZIndex = 5
+titleBar.Parent = fr
+local title = Instance.new("TextLabel")
+title.Text = "Ascension Auto"
+title.BackgroundTransparency = 1
+title.Position = UDim2.fromOffset(18, 0)
+title.Size = UDim2.new(1, -110, 1, 0)
+title.Font = F_TITLE
+title.TextSize = 18
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextTransparency = 1
+title.ZIndex = 6
+title.Parent = titleBar
+track(title)
+local GLYPH_MINUS = { { t = "p", d = "M5 12h14" } }
+local GLYPH_PLUS = { { t = "p", d = "M12 5v14" }, { t = "p", d = "M5 12h14" } }
+local GLYPH_X = { { t = "p", d = "M18 6 6 18" }, { t = "p", d = "M6 6l12 12" } }
+for _, g in ipairs({ GLYPH_MINUS, GLYPH_PLUS, GLYPH_X }) do
+	for _, sh in ipairs(g) do
+		if sh.t == "p" then sh.subs = parsePath(sh.d) end
+	end
+end
+local HEADER_ICON = 15
+local HEADER_DIM = Color3.fromRGB(200, 200, 210)
+local function headerBtn(shapes, x)
+	local b = Instance.new("TextButton")
+	b.Text = ""
+	b.AutoButtonColor = false
+	b.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	b.BackgroundTransparency = 1
+	b.AnchorPoint = Vector2.new(1, 0.5)
+	b.Position = UDim2.new(1, x, 0.5, 0)
+	b.Size = UDim2.fromOffset(28, 28)
+	b.ZIndex = 6
+	b.Parent = titleBar
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(1, 0)
+	c.Parent = b
+	local s = Instance.new("UIScale")
+	s.Parent = b
+	local ico = makeIcon(b, shapes, HEADER_ICON, HEADER_DIM, 7)
+	ico.AnchorPoint = Vector2.new(0.5, 0.5)
+	ico.Position = UDim2.fromScale(0.5, 0.5)
+	b.MouseEnter:Connect(function()
+		tw(b, 0.15, nil, nil, { BackgroundTransparency = 0.86 })
+		tintIcon(ico, Color3.fromRGB(255, 255, 255), 0.15)
+	end)
+	b.MouseLeave:Connect(function()
+		tw(b, 0.2, nil, nil, { BackgroundTransparency = 1 })
+		tintIcon(ico, HEADER_DIM, 0.2)
+		tw(s, 0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out, { Scale = 1 })
+	end)
+	b.MouseButton1Down:Connect(function() tw(s, 0.08, nil, nil, { Scale = 0.88 }) end)
+	b.MouseButton1Up:Connect(function() tw(s, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out, { Scale = 1 }) end)
+	track(b)
+	return b, ico
+end
+local bMin, icoMin = headerBtn(GLYPH_MINUS, -44)
+local icoMinPlus = makeIcon(bMin, GLYPH_PLUS, HEADER_ICON, HEADER_DIM, 7)
+icoMinPlus.AnchorPoint = Vector2.new(0.5, 0.5)
+icoMinPlus.Position = UDim2.fromScale(0.5, 0.5)
+icoMinPlus.Visible = false
+local bClose, icoClose = headerBtn(GLYPH_X, -8)
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.Position = UDim2.fromOffset(SIDE_W, TOP_H)
+content.Size = UDim2.new(1, -SIDE_W, 1, -TOP_H)
+content.Parent = fr
+local function makeToggle(parent, text, onFlip)
+	local row = Instance.new("TextButton")
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.new(1, -12, 0, 44)
+	row.Parent = parent
+	local rowCorner = Instance.new("UICorner")
+	rowCorner.CornerRadius = UDim.new(0, 12)
+	rowCorner.Parent = row
+	local lab = Instance.new("TextLabel")
+	lab.Text = text
+	lab.BackgroundTransparency = 1
+	lab.Position = UDim2.fromOffset(12, 0)
+	lab.Size = UDim2.new(1, -78, 1, 0)
+	lab.Font = F_LABEL
+	lab.TextSize = 16
+	lab.TextColor3 = TEXT_MAIN
+	lab.TextXAlignment = Enum.TextXAlignment.Left
+	lab.TextTransparency = 1
+	lab.Parent = row
+	track(lab)
+	local trackF = Instance.new("Frame")
+	trackF.BackgroundColor3 = TRACK_OFF
+	trackF.Position = UDim2.new(1, -58, 0.5, -13)
+	trackF.Size = UDim2.fromOffset(48, 27)
+	trackF.Parent = row
+	local tc = Instance.new("UICorner")
+	tc.CornerRadius = UDim.new(1, 0)
+	tc.Parent = trackF
+	local knob = Instance.new("Frame")
+	knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	knob.Position = UDim2.new(0, 3, 0.5, -11)
+	knob.Size = UDim2.fromOffset(21, 21)
+	knob.Parent = trackF
+	local kc = Instance.new("UICorner")
+	kc.CornerRadius = UDim.new(1, 0)
+	kc.Parent = knob
+	local kg = Instance.new("UIGradient")
+	kg.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(220, 220, 228))
+	kg.Rotation = 90
+	kg.Parent = knob
+	local state = false
+	row.MouseEnter:Connect(function() tw(row, 0.15, nil, nil, { BackgroundTransparency = 0.94 }) end)
+	row.MouseLeave:Connect(function() tw(row, 0.2, nil, nil, { BackgroundTransparency = 1 }) end)
+	row.MouseButton1Click:Connect(function()
+		state = not state
+		tw(knob, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out, {
+			Position = state and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 3, 0.5, -11),
+		})
+		tw(trackF, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, {
+			BackgroundColor3 = state and APPLE_GREEN or TRACK_OFF,
+		})
+		tw(row, 0.12, nil, nil, { BackgroundTransparency = 0.88 })
+		task.delay(0.12, function() tw(row, 0.25, nil, nil, { BackgroundTransparency = 1 }) end)
+		if onFlip then onFlip(state) end
+		markDirty()
+	end)
+	local function apply(v, animate)
+		state = v and true or false
+		if animate then
+			tw(knob, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out, {
+				Position = state and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 3, 0.5, -11),
+			})
+			tw(trackF, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, {
+				BackgroundColor3 = state and APPLE_GREEN or TRACK_OFF,
+			})
+		else
+			knob.Position = state and UDim2.new(1, -24, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
+			trackF.BackgroundColor3 = state and APPLE_GREEN or TRACK_OFF
+		end
+	end
+	table.insert(ALL_TOGGLES, { text = text, apply = apply })
+	return { row = row, label = lab, apply = apply }
+end
+local function makeButton(parent, text, onClick)
+	local row = Instance.new("TextButton")
+	row.Text = ""
+	row.AutoButtonColor = false
+	row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	row.BackgroundTransparency = 0.93
+	row.Size = UDim2.new(1, -12, 0, 40)
+	row.Parent = parent
+	local rc = Instance.new("UICorner")
+	rc.CornerRadius = UDim.new(0, 12)
+	rc.Parent = row
+	local lab = Instance.new("TextLabel")
+	lab.Text = text
+	lab.BackgroundTransparency = 1
+	lab.Size = UDim2.fromScale(1, 1)
+	lab.Font = F_LABEL
+	lab.TextSize = 15
+	lab.TextColor3 = TEXT_MAIN
+	lab.TextTransparency = 1
+	lab.Parent = row
+	track(lab)
+	row.MouseEnter:Connect(function() tw(row, 0.15, nil, nil, { BackgroundTransparency = 0.87 }) end)
+	row.MouseLeave:Connect(function() tw(row, 0.2, nil, nil, { BackgroundTransparency = 0.93 }) end)
+	row.MouseButton1Click:Connect(function()
+		tw(row, 0.1, nil, nil, { BackgroundTransparency = 0.8 })
+		task.delay(0.1, function() tw(row, 0.2, nil, nil, { BackgroundTransparency = 0.93 }) end)
+		if onClick then onClick() end
+	end)
+	return { row = row, label = lab }
+end
+local function makeSection(parent, text)
+	local lab = Instance.new("TextLabel")
+	lab.Text = text:upper()
+	lab.BackgroundTransparency = 1
+	lab.Size = UDim2.new(1, -36, 0, 22)
+	lab.Font = F_SECTION
+	lab.TextSize = 13
+	lab.TextColor3 = TEXT_MUTE
+	lab.TextXAlignment = Enum.TextXAlignment.Left
+	lab.TextTransparency = 1
+	lab.Parent = parent
+	track(lab)
+	return lab
+end
+local function makeDivider(parent, w)
+	local d = Instance.new("Frame")
+	d.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	d.Size = UDim2.new(1, w or -28, 0, 1)
+	d.BorderSizePixel = 0
+	d.Parent = parent
+	track(d)
+	return d
+end
+local function makeInfo(parent, text, y)
+	local lab = Instance.new("TextLabel")
+	lab.Text = text
+	lab.BackgroundTransparency = 1
+	lab.Size = UDim2.new(1, -32, 0, 44)
+	lab.Position = UDim2.fromOffset(18, y)
+	lab.Font = F_BODY
+	lab.TextSize = 13
+	lab.TextColor3 = TEXT_MUTE
+	lab.TextXAlignment = Enum.TextXAlignment.Left
+	lab.TextYAlignment = Enum.TextYAlignment.Top
+	lab.TextWrapped = true
+	lab.TextTransparency = 1
+	lab.Parent = parent
+	track(lab)
+	return lab
+end
+local openDropdowns = {}
+local function makeDropdown(parent, options, default, onSelect)
+	local wrap = Instance.new("Frame")
+	wrap.BackgroundTransparency = 1
+	wrap.Size = UDim2.new(1, -12, 0, 46)
+	wrap.Parent = parent
+	local btn = Instance.new("TextButton")
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	btn.BackgroundTransparency = 0.93
+	btn.Size = UDim2.fromScale(1, 1)
+	btn.Parent = wrap
+	local bc = Instance.new("UICorner")
+	bc.CornerRadius = UDim.new(0, 12)
+	bc.Parent = btn
+	local lab = Instance.new("TextLabel")
+	lab.Text = default
+	lab.BackgroundTransparency = 1
+	lab.Position = UDim2.fromOffset(12, 0)
+	lab.Size = UDim2.new(1, -42, 1, 0)
+	lab.Font = F_LABEL
+	lab.TextSize = 16
+	lab.TextColor3 = TEXT_MAIN
+	lab.TextXAlignment = Enum.TextXAlignment.Left
+	lab.TextTransparency = 1
+	lab.Parent = btn
+	track(lab)
+	local chev = Instance.new("TextLabel")
+	chev.Text = "›"
+	chev.BackgroundTransparency = 1
+	chev.AnchorPoint = Vector2.new(1, 0.5)
+	chev.Position = UDim2.new(1, -14, 0.5, 0)
+	chev.Size = UDim2.fromOffset(14, 22)
+	chev.Font = F_SECTION
+	chev.TextSize = 19
+	chev.TextColor3 = TEXT_DIM
+	chev.TextTransparency = 1
+	chev.Rotation = 90
+	chev.Parent = btn
+	track(chev)
+	local POP_H = 232
+	local pop = Instance.new("Frame")
+	pop.BackgroundColor3 = Color3.fromRGB(26, 26, 31)
+	pop.BackgroundTransparency = 0.1
+	pop.BorderSizePixel = 0
+	pop.Visible = false
+	pop.ZIndex = 40
+	pop.ClipsDescendants = true
+	pop.Size = UDim2.fromOffset(200, POP_H)
+	pop.Parent = fr
+	local pc = Instance.new("UICorner")
+	pc.CornerRadius = UDim.new(0, 16)
+	pc.Parent = pop
+	local pgrad = Instance.new("UIGradient")
+	pgrad.Color = ColorSequence.new(Color3.fromRGB(44, 44, 52), Color3.fromRGB(20, 20, 25))
+	pgrad.Rotation = 90
+	pgrad.Transparency = NumberSequence.new(0.06, 0.16)
+	pgrad.Parent = pop
+	local ps = Instance.new("UIStroke")
+	ps.Color = Color3.fromRGB(255, 255, 255)
+	ps.Transparency = 0.88
+	ps.Thickness = 1
+	ps.ZIndex = 41
+	ps.Parent = pop
+	local list = Instance.new("ScrollingFrame")
+	list.BackgroundTransparency = 1
+	list.BorderSizePixel = 0
+	list.Size = UDim2.new(1, -10, 1, -10)
+	list.Position = UDim2.fromOffset(5, 5)
+	list.ScrollBarThickness = 3
+	list.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+	list.ScrollBarImageTransparency = 0.82
+	list.ScrollingDirection = Enum.ScrollingDirection.Y
+	list.ZIndex = 42
+	list.Parent = pop
+	local listInner = Instance.new("Frame")
+	listInner.BackgroundTransparency = 1
+	listInner.BorderSizePixel = 0
+	listInner.Size = UDim2.new(1, -4, 0, 0)
+	listInner.AutomaticSize = Enum.AutomaticSize.Y
+	listInner.ZIndex = 41
+	listInner.Parent = list
+	local function syncList()
+		list.CanvasSize = UDim2.fromOffset(0, math.max(listInner.AbsoluteSize.Y, list.AbsoluteSize.Y))
+	end
+	listInner:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncList)
+	local selected = default
+	local function closePop()
+		if not pop.Visible then return end
+		pop.Visible = false
+		tw(chev, 0.2, nil, nil, { Rotation = 90 })
+		for i, o in ipairs(openDropdowns) do
+			if o == closePop then table.remove(openDropdowns, i) break end
+		end
+	end
+	local function placePop()
+		local ax = btn.AbsolutePosition.X - fr.AbsolutePosition.X
+		local ay = btn.AbsolutePosition.Y - fr.AbsolutePosition.Y
+		local w = math.max(btn.AbsoluteSize.X, 120)
+		local below = ay + 42 + 2
+		pop.Size = UDim2.fromOffset(w, POP_H)
+		if below + POP_H <= WIN_H - 6 then
+			pop.Position = UDim2.fromOffset(ax, below)
+		else
+			pop.Position = UDim2.fromOffset(ax, math.max(6, ay - POP_H - 2))
+		end
+	end
+	local function openPop()
+		if pop.Visible then
+			closePop()
+			return
+		end
+		placePop()
+		pop.Visible = true
+		tw(chev, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out, { Rotation = 0 })
+		table.insert(openDropdowns, closePop)
+		for i, item in ipairs(listInner:GetChildren()) do
+			if item:IsA("TextButton") then
+				item.TextTransparency = 1
+				item.BackgroundTransparency = 1
+				task.delay(i * 0.018, function()
+					if pop.Visible then
+						tw(item, 0.18, nil, nil, {
+							TextTransparency = 0,
+							BackgroundTransparency = item:GetAttribute("Rest") or 1,
+						})
+					end
+				end)
+			end
+		end
+	end
+	for i, opt in ipairs(options) do
+		local isSel = opt == selected
+		local item = Instance.new("TextButton")
+		item.Text = opt
+		item.AutoButtonColor = false
+		item.BackgroundColor3 = isSel and APPLE_GREEN or Color3.fromRGB(255, 255, 255)
+		item.BackgroundTransparency = isSel and 0.9 or 1
+		item:SetAttribute("Rest", isSel and 0.9 or 1)
+		item:SetAttribute("Hover", isSel and 0.84 or 0.93)
+		item.Size = UDim2.new(1, -2, 0, 32)
+		item.Position = UDim2.fromOffset(1, (i - 1) * 38)
+		item.Font = F_LABEL
+		item.TextSize = 14
+		item.TextColor3 = isSel and APPLE_GREEN or TEXT_MAIN
+		item.TextXAlignment = Enum.TextXAlignment.Left
+		item.ZIndex = 43
+		item.Parent = listInner
+		local ic = Instance.new("UICorner")
+		ic.CornerRadius = UDim.new(0, 10)
+		ic.Parent = item
+		local ip = Instance.new("UIPadding")
+		ip.PaddingLeft = UDim.new(0, 10)
+		ip.PaddingRight = UDim.new(0, 6)
+		ip.Parent = item
+		item.MouseEnter:Connect(function()
+			tw(item, 0.12, nil, nil, { BackgroundTransparency = item:GetAttribute("Hover") })
+		end)
+		item.MouseLeave:Connect(function()
+			tw(item, 0.15, nil, nil, { BackgroundTransparency = item:GetAttribute("Rest") })
+		end)
+		item.MouseButton1Click:Connect(function()
+			selected = opt
+			lab.Text = opt
+			for _, other in ipairs(listInner:GetChildren()) do
+				if other:IsA("TextButton") then
+					local on = other.Text == opt
+					other:SetAttribute("Rest", on and 0.9 or 1)
+					other:SetAttribute("Hover", on and 0.84 or 0.93)
+					other.BackgroundColor3 = on and APPLE_GREEN or Color3.fromRGB(255, 255, 255)
+					tw(other, 0.15, nil, nil, {
+						TextColor3 = on and APPLE_GREEN or TEXT_MAIN,
+						BackgroundTransparency = on and 0.9 or 1,
+					})
+				end
+			end
+			closePop()
+			if onSelect then onSelect(opt) end
+		end)
+	end
+	btn.MouseEnter:Connect(function() tw(btn, 0.15, nil, nil, { BackgroundTransparency = 0.88 }) end)
+	btn.MouseLeave:Connect(function()
+		if not pop.Visible then tw(btn, 0.2, nil, nil, { BackgroundTransparency = 0.93 }) end
+	end)
+	btn.MouseButton1Click:Connect(openPop)
+	return {
+		widget = wrap,
+		get = function() return selected end,
+		set = function(v)
+			selected = v
+			lab.Text = v
+			for _, other in ipairs(listInner:GetChildren()) do
+				if other:IsA("TextButton") then
+					local on = other.Text == v
+					other:SetAttribute("Rest", on and 0.9 or 1)
+					other:SetAttribute("Hover", on and 0.84 or 0.93)
+					other.BackgroundColor3 = on and APPLE_GREEN or Color3.fromRGB(255, 255, 255)
+					other.TextColor3 = on and APPLE_GREEN or TEXT_MAIN
+					other.BackgroundTransparency = on and 0.9 or 1
+				end
+			end
+		end,
+		close = closePop,
+	}
+end
+local TABS = {}
+local tabButtons, tabIndicator, selectTab, sidebarLabels
+local activeTab = nil
+selectTab = function(tab)
+	if activeTab == tab then return end
+	local prev = activeTab
+	activeTab = tab
+	for _, close in ipairs(openDropdowns) do
+		pcall(close)
+	end
+	if prev and prev.page then
+		local pf = prev.page
+		tw(pf, 0.16, Enum.EasingStyle.Quint, Enum.EasingDirection.In, { Position = UDim2.fromOffset(-18, 0) })
+		pf.Visible = false
+		pf.Position = UDim2.fromOffset(0, 0)
+	end
+	local nf = tab.page
+	if nf then
+		nf.Visible = true
+		nf.Position = UDim2.fromOffset(14, 0)
+		tw(nf, 0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, { Position = UDim2.fromOffset(0, 0) })
+		tab.syncCanvas()
+		eachText(nf, function(o) o.TextTransparency = 1 end)
+		local i = 0
+		eachText(nf, function(o)
+			i += 1
+			task.delay(i * 0.014, function()
+				if alive() and activeTab == tab and nf.Visible then
+					tw(o, 0.24, nil, nil, { TextTransparency = 0 })
+				end
+			end)
+		end)
+	end
+	for _, entry in ipairs(tabButtons) do
+		local on = entry.tab == tab
+		tw(entry.name, 0.2, nil, nil, { TextColor3 = on and TEXT_MAIN or TEXT_DIM })
+		tw(entry.button, 0.2, nil, nil, { BackgroundTransparency = on and 0.9 or 1 })
+	end
+	for i, entry in ipairs(tabButtons) do
+		if entry.tab == tab then
+			tw(tabIndicator, 0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out, {
+				Position = UDim2.fromOffset(5, 12 + (i - 1) * (TAB_ROW_H + TAB_ROW_GAP) + TAB_ROW_H / 2 - 10),
+			})
+			break
+		end
+	end
+end
+local function newPage(name)
+	local page = Instance.new("Frame")
+	page.Name = name
+	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.Size = UDim2.fromScale(1, 1)
+	page.Visible = false
+	page.Parent = content
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.Size = UDim2.fromScale(1, 1)
+	scroll.ScrollBarThickness = 3
+	scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+	scroll.ScrollBarImageTransparency = 0.75
+	scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	scroll.Parent = page
+	local inner = Instance.new("Frame")
+	inner.BackgroundTransparency = 1
+	inner.BorderSizePixel = 0
+	inner.Size = UDim2.new(1, -6, 0, 0)
+	inner.AutomaticSize = Enum.AutomaticSize.Y
+	inner.Parent = scroll
+	local function syncCanvas()
+		scroll.CanvasSize = UDim2.fromOffset(0, math.max(inner.AbsoluteSize.Y, scroll.AbsoluteSize.Y) + 20)
+	end
+	inner:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncCanvas)
+	inner:GetPropertyChangedSignal("AutomaticSize"):Connect(syncCanvas)
+	page:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncCanvas)
+	task.defer(syncCanvas)
+	local tab = { name = name, icon = name, page = page, inner = inner, syncCanvas = syncCanvas }
+	table.insert(TABS, tab)
+	return inner
+end
+local function place(o, y)
+	o.Position = UDim2.fromOffset(6, y)
+	return o
+end
+local S = {
+	magnet = false,
+	yangUp = false,
+	yinUp = false,
+	autoRune = false,
+	autoFish = false,
+	autoSell = false,
+	autoMerge = false,
+	autoBottle = false,
+	upCoins = false,
+	upCash = false,
+	upTycoonCash = false,
+	upTycoonLevel = false,
+	autoTycoonColor = false,
+	upBottles = false,
+	upBones = false,
+	upTokens = false,
+	autoCoinTier = false,
+	autoBottleTier = false,
+	autoRank = false,
+	autoRods = false,
+	autoReborn = false,
+	autoRebirth = false,
+	autoTycoonUp = false,
+	cultivate = false,
+	infJump = false,
+	noclip = false,
+	antiAfk = true,
+	autoExec = true,
+	walkSpeed = 42,
+	jumpPower = 50,
+}
+local selectedRune = DEFAULT_RUNE
+local p1 = newPage("Yang")
+local s1 = makeSection(p1, "Collector")
+s1.Position = UDim2.fromOffset(18, 12)
+place(makeToggle(p1, "Magnet", function(v) S.magnet = v end).row, 40)
+local dv1 = makeDivider(p1)
+dv1.Position = UDim2.fromOffset(14, 88)
+place(makeToggle(p1, "Auto Cultivation", function(v)
+	S.cultivate = v
+	pcall(function() Cultivate:FireServer(v) end)
+end).row, 100)
+place(makeToggle(p1, "Auto Yang Up", function(v) S.yangUp = v end).row, 150)
+place(makeToggle(p1, "Auto Yin Up", function(v) S.yinUp = v end).row, 198)
+makeInfo(p1, "Cultivation rate is fixed server-side, spamming it does not speed it up.", 252)
+local p2 = newPage("Runes")
+local s2 = makeSection(p2, "Rune Pool")
+s2.Position = UDim2.fromOffset(18, 12)
+local refreshRuneList = function() end
+local ddRune = makeDropdown(p2, RUNE_POOLS, DEFAULT_RUNE, function(v) selectedRune = v refreshRuneList() markDirty() end)
+ddRune.widget.Position = UDim2.fromOffset(6, 40)
+place(makeToggle(p2, "Auto Rune", function(v)
+	S.autoRune = v
+	if not v then pcall(function() RollRuneEvent:FireServer(nil) end) end
+end).row, 94)
+place(makeButton(p2, "Roll Once", function()
+	pcall(function() RollRuneEvent:FireServer(selectedRune) end)
+end).row, 142)
+local runeListHeader = makeSection(p2, "Pool Runes")
+runeListHeader.Position = UDim2.fromOffset(18, 190)
+local runeRows = {}
+local runeRowY = 214
+local gradFolder = RS:WaitForChild("RunesGradient")
+local runeColorCache = {}
+local function runeColor(name)
+	local c = runeColorCache[name]
+	if c == nil then
+		c = false
+		pcall(function()
+			local g = gradFolder:FindFirstChild(name)
+			local col = g and g.Color
+			if col and typeof(col) == "ColorSequence" and #col.Keypoints > 0 then
+				c = col.Keypoints[1].Value
+			end
+		end)
+		runeColorCache[name] = c
+	end
+	return c or TEXT_MAIN
+end
+local function shortOwned(str)
+	local ok, om = pcall(OmegaNum.toOmega, str)
+	if not ok or om == nil then return tostring(str) end
+	local ok2, sh = pcall(OmegaNum.short, om)
+	if not ok2 then return tostring(str) end
+	return tostring(sh)
+end
+local function runeRowText(pool, name, info)
+	local owned = "0"
+	pcall(function()
+		local rf = LP:FindFirstChild("Runes")
+		local pf = rf and rf:FindFirstChild(pool)
+		local vf = pf and pf:FindFirstChild(name)
+		if vf then owned = shortOwned(vf.Value) end
+	end)
+	local odds
+	if info.Percent then
+		odds = info.Percent .. "%"
+	else
+		local w = tonumber(info.Weight) or 0
+		odds = "1/" .. shortOwned(tostring(w))
+		if w > 0 and w <= 100000 then
+			odds ..= " · " .. string.format("%.3g", 100 / w) .. "%"
+		end
+	end
+	local extra = ""
+	if info.Luck == false then extra ..= " · Deity" end
+	pcall(function()
+		local rf = LP:FindFirstChild("Runes")
+		local dp = rf and rf:FindFirstChild("DietyPity")
+		local pv = dp and dp:FindFirstChild(name)
+		if pv then extra ..= " · Pity " .. shortOwned(pv.Value) end
+	end)
+	return name .. "  x" .. owned, odds .. extra
+end
+refreshRuneList = function()
+	for _, r in ipairs(runeRows) do
+		if r.hold and r.hold.Parent then r.hold:Destroy() end
+		if r.sub and r.sub.Parent then r.sub:Destroy() end
+	end
+	for i = #animatables, 1, -1 do
+		local o = animatables[i]
+		if typeof(o) == "Instance" and o.Parent == nil then
+			table.remove(animatables, i)
+		end
+	end
+	runeRows = {}
+	local pool = selectedRune
+	local data = RuneData[pool]
+	if not data or not data.Chances then return end
+	local names = {}
+	for n in pairs(data.Chances) do table.insert(names, n) end
+	table.sort(names, function(a, b)
+		return (tonumber(data.Chances[a].Weight) or math.huge) < (tonumber(data.Chances[b].Weight) or math.huge)
+	end)
+	local y = runeRowY
+	local opened = ""
+	pcall(function()
+		local rf = LP:FindFirstChild("Runes")
+		local ro = rf and rf:FindFirstChild("RunesOpened")
+		local ov = ro and ro:FindFirstChild(pool)
+		if ov then opened = " · opened " .. shortOwned(ov.Value) end
+	end)
+	local closed = ""
+	if (pool == "YinRune" or pool == "YangRune") and not YinYangSchedule.IsOpen(pool) then
+		closed = " · CLOSED"
+	end
+	local head = makeInfo(p2, pool .. " · " .. #names .. " runes" .. opened .. closed, y)
+	head.Font = F_SECTION
+	head.TextSize = 13
+	head.TextColor3 = TEXT_DIM
+	head.Size = UDim2.new(1, -36, 0, 18)
+	table.insert(runeRows, { hold = head })
+	y += 20
+	for _, n in ipairs(names) do
+		local info = data.Chances[n]
+		local t1, t2 = runeRowText(pool, n, info)
+		local hold = Instance.new("TextLabel")
+		hold.Text = t1
+		hold.BackgroundTransparency = 1
+		hold.Position = UDim2.fromOffset(18, y)
+		hold.Size = UDim2.new(1, -36, 0, 18)
+		hold.Font = F_LABEL
+		hold.TextSize = 15
+		hold.TextColor3 = runeColor(n)
+		hold.TextXAlignment = Enum.TextXAlignment.Left
+		hold.TextTruncate = Enum.TextTruncate.AtEnd
+		hold.Parent = p2
+		track(hold)
+		local sub = Instance.new("TextLabel")
+		sub.Text = t2
+		sub.BackgroundTransparency = 1
+		sub.Position = UDim2.fromOffset(18, y + 17)
+		sub.Size = UDim2.new(1, -36, 0, 15)
+		sub.Font = F_BODY
+		sub.TextSize = 12
+		sub.TextColor3 = TEXT_MUTE
+		sub.TextXAlignment = Enum.TextXAlignment.Left
+		sub.TextTruncate = Enum.TextTruncate.AtEnd
+		sub.Parent = p2
+		track(sub)
+		table.insert(runeRows, { hold = hold, sub = sub, name = n })
+		y += 34
+	end
+end
+task.spawn(function()
+	while alive() do
+		task.wait(2)
+		if not alive() then return end
+		local data = RuneData[selectedRune]
+		if data and data.Chances and #runeRows > 1 then
+			for _, r in ipairs(runeRows) do
+				if r.name and r.hold and r.hold.Parent and data.Chances[r.name] then
+					local t1, t2 = runeRowText(selectedRune, r.name, data.Chances[r.name])
+					r.hold.Text = t1
+					if r.sub then r.sub.Text = t2 end
+				end
+			end
+		end
+	end
+end)
+local p3 = newPage("Fishing")
+local s3 = makeSection(p3, "Fishing")
+s3.Position = UDim2.fromOffset(18, 12)
+place(makeToggle(p3, "Auto Fish", function(v) S.autoFish = v end).row, 40)
+place(makeToggle(p3, "Auto Sell Fish", function(v) S.autoSell = v end).row, 88)
+place(makeToggle(p3, "Auto Merge Bones", function(v) S.autoMerge = v end).row, 136)
+local dv3 = makeDivider(p3)
+dv3.Position = UDim2.fromOffset(14, 184)
+place(makeToggle(p3, "Auto Click Bottles", function(v) S.autoBottle = v end).row, 196)
+makeInfo(p3, "Sell turns every fish into Coins.\nMerge combines the fishbone nodes.", 248)
+local p4 = newPage("Upgrades")
+local s4 = makeSection(p4, "Auto Upgrades")
+s4.Position = UDim2.fromOffset(18, 12)
+place(makeToggle(p4, "Auto Coins Upgrades", function(v) S.upCoins = v end).row, 40)
+place(makeToggle(p4, "Auto Bottles Upgrades", function(v) S.upBottles = v end).row, 88)
+place(makeToggle(p4, "Auto Fishbones Upgrades", function(v) S.upBones = v end).row, 136)
+place(makeToggle(p4, "Auto Token Upgrades", function(v) S.upTokens = v end).row, 184)
+local dv4 = makeDivider(p4)
+dv4.Position = UDim2.fromOffset(14, 232)
+place(makeToggle(p4, "Auto Coin Tier", function(v) S.autoCoinTier = v end).row, 244)
+place(makeToggle(p4, "Auto Bottle Tier", function(v) S.autoBottleTier = v end).row, 292)
+place(makeToggle(p4, "Auto Fisher Rank", function(v) S.autoRank = v end).row, 340)
+place(makeToggle(p4, "Auto Best Rod", function(v) S.autoRods = v end).row, 388)
+local dv4b = makeDivider(p4)
+dv4b.Position = UDim2.fromOffset(14, 436)
+local s4b = makeSection(p4, "Prestige")
+s4b.Position = UDim2.fromOffset(18, 448)
+place(makeToggle(p4, "Auto Reborn", function(v) S.autoReborn = v end).row, 474)
+local pT = newPage("Tycoon")
+local sT = makeSection(pT, "Tycoon")
+sT.Position = UDim2.fromOffset(18, 12)
+place(makeToggle(pT, "Auto Tycoon Cash Upgrades", function(v) S.upTycoonCash = v end).row, 40)
+place(makeToggle(pT, "Auto Tycoon Level Upgrades", function(v) S.upTycoonLevel = v end).row, 88)
+place(makeToggle(pT, "Auto Tycoon Upgraders", function(v) S.autoTycoonUp = v end).row, 136)
+place(makeToggle(pT, "Auto Tycoon Color", function(v)
+	S.autoTycoonColor = v
+	if v then
+		local h0 = hrp()
+		if h0 then S._colorReturn = h0.CFrame end
+	else
+		if S._colorReturn then
+			local h1 = hrp()
+			if h1 then h1.CFrame = S._colorReturn end
+			S._colorReturn = nil
+		end
+	end
+end).row, 184)
+place(makeToggle(pT, "Auto Rebirth", function(v) S.autoRebirth = v end).row, 232)
+makeInfo(pT, "Cash board Cash ister, Level board LevelPoints ister.\nColor server otomatik atar (1sn) - butonda durman gerekir.", 284)
+local p5 = newPage("Player")
+local s5 = makeSection(p5, "Character")
+s5.Position = UDim2.fromOffset(18, 12)
+local lblSpeed = makeInfo(p5, string.format("WalkSpeed  %d", S.walkSpeed), 38)
+lblSpeed.Size = UDim2.new(1, -36, 0, 18)
+lblSpeed.Font = F_SECTION
+lblSpeed.TextSize = 15
+lblSpeed.TextColor3 = APPLE_GREEN
+local lblJump = makeInfo(p5, string.format("JumpPower  %d", S.jumpPower), 152)
+lblJump.Size = UDim2.new(1, -36, 0, 18)
+lblJump.Font = F_SECTION
+lblJump.TextSize = 15
+lblJump.TextColor3 = APPLE_GREEN
+local function applySpeed()
+	local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+	if hum then hum.WalkSpeed = S.walkSpeed end
+end
+local function applyJump()
+	local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.UseJumpPower = true
+		hum.JumpPower = S.jumpPower
+	end
+end
+place(makeButton(p5, "WalkSpeed  +", function()
+	S.walkSpeed = math.clamp(S.walkSpeed + 8, 16, 300)
+	lblSpeed.Text = string.format("WalkSpeed  %d", S.walkSpeed)
+	applySpeed()
+	markDirty()
+end).row, 64)
+place(makeButton(p5, "WalkSpeed  −", function()
+	S.walkSpeed = math.clamp(S.walkSpeed - 8, 16, 300)
+	lblSpeed.Text = string.format("WalkSpeed  %d", S.walkSpeed)
+	applySpeed()
+	markDirty()
+end).row, 106)
+place(makeButton(p5, "JumpPower  +", function()
+	S.jumpPower = math.clamp(S.jumpPower + 25, 50, 400)
+	lblJump.Text = string.format("JumpPower  %d", S.jumpPower)
+	applyJump()
+	markDirty()
+end).row, 178)
+place(makeButton(p5, "JumpPower  −", function()
+	S.jumpPower = math.clamp(S.jumpPower - 25, 50, 400)
+	lblJump.Text = string.format("JumpPower  %d", S.jumpPower)
+	applyJump()
+	markDirty()
+end).row, 220)
+local dv5 = makeDivider(p5)
+dv5.Position = UDim2.fromOffset(14, 270)
+place(makeToggle(p5, "Infinite Jump", function(v) S.infJump = v end).row, 282)
+place(makeToggle(p5, "Noclip", function(v) S.noclip = v end).row, 330)
+place(makeToggle(p5, "Anti-AFK", function(v) S.antiAfk = v end).row, 378)
+local p6 = newPage("Settings")
+local s6 = makeSection(p6, "Configuration")
+s6.Position = UDim2.fromOffset(18, 12)
+place(makeToggle(p6, "Auto Save", function(v)
+	autoSaveOn = v
+	if v then
+		saveConfig()
+		lblStat.Text = "Settings will be remembered on rejoin."
+		lblStat.TextColor3 = APPLE_GREEN
+	else
+		lblStat.Text = "Auto Save off - changes are not stored."
+		lblStat.TextColor3 = TEXT_DIM
+	end
+end).row, 40)
+place(makeToggle(p6, "Auto Execute on Teleport", function(v)
+	S.autoExec = v
+	queueAutoExec(v)
+	markDirty()
+end).row, 88)
+place(makeButton(p6, "Rejoin Server", function()
+	pcall(function()
+		game:GetService("TeleportService"):Teleport(game.PlaceId, LP)
+	end)
+end).row, 138)
+place(makeButton(p6, "Stop All", function()
+	for k, v in pairs(S) do
+		if type(v) == "boolean" and k ~= "antiAfk" and k ~= "autoExec" then S[k] = false end
+	end
+	for _, t in ipairs(ALL_TOGGLES) do
+		if t.text ~= "Auto Save" and t.text ~= "Auto Execute on Teleport" then t.apply(false, true) end
+	end
+	pcall(function() RollRuneEvent:FireServer(nil) end)
+	lblStat.Text = "All toggles are off - click them again to re-enable."
+	lblStat.TextColor3 = APPLE_GREEN
+	markDirty()
+end).row, 182)
+place(makeButton(p6, "Clear Saved Data", function()
+	pcall(function()
+		if isfile and isfile(CONFIG_PATH) then delfile(CONFIG_PATH) end
+	end)
+	for _, t in ipairs(ALL_TOGGLES) do
+		if t.text ~= "Auto Save" and t.text ~= "Auto Execute on Teleport" then t.apply(false, false) end
+	end
+	for _, key in pairs(TOGGLE_KEY_BY_TEXT) do
+		if key ~= "autoExec" and type(S[key]) == "boolean" then S[key] = false end
+	end
+	lblStat.Text = "Saved data cleared."
+	lblStat.TextColor3 = APPLE_GREEN
+end).row, 226)
+local lblStat = makeInfo(p6, "Ready.", 274)
+lblStat.Size = UDim2.new(1, -36, 0, 18)
+lblStat.TextSize = 13
+lblStat.TextColor3 = TEXT_DIM
+local lblFps = makeInfo(p6, "FPS  —", 296)
+lblFps.Size = UDim2.new(1, -36, 0, 18)
+lblFps.Font = F_SECTION
+lblFps.TextSize = 13
+lblFps.TextColor3 = TEXT_MUTE
+makeInfo(p6, "Rune interval " .. string.format("%gs", DELAY.rune) .. "  · Fish " .. string.format("%gs", DELAY.fish), 324)
+makeInfo(p6, "Restored toggles run the moment the script loads.\nTeleport queue keeps the script alive across rejoins.", 360)
+tabButtons = {}
+sidebarLabels = {}
+do
+	local y = 12
+	local ROW_H, ROW_GAP = TAB_ROW_H, TAB_ROW_GAP
+	for i, tab in ipairs(TABS) do
+		local b = Instance.new("TextButton")
+		b.Text = ""
+		b.AutoButtonColor = false
+		b.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		b.BackgroundTransparency = 1
+		b.Size = UDim2.new(1, -16, 0, ROW_H)
+		b.Position = UDim2.fromOffset(9, y)
+		b.Parent = side
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 12)
+		c.Parent = b
+		local icon
+		local asset = TAB_IMAGE[tab.name]
+		if asset then
+			icon = Instance.new("ImageLabel")
+			icon.Name = "Icon"
+			icon.BackgroundTransparency = 1
+			icon.Image = asset
+			icon.ImageColor3 = TEXT_DIM
+			icon.ScaleType = Enum.ScaleType.Fit
+			icon.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
+			icon.AnchorPoint = Vector2.new(0, 0.5)
+			icon.Position = UDim2.new(0, 13, 0.5, 0)
+			icon.ZIndex = 1
+			icon.Parent = b
+		else
+			icon = makeIcon(b, TAB_ICONS[tab.icon] or TAB_ICONS.Yang, ICON_SIZE, TEXT_DIM, 1)
+			icon.Name = "Icon"
+			icon.AnchorPoint = Vector2.new(0, 0.5)
+			icon.Position = UDim2.new(0, 13, 0.5, 0)
+		end
+		local iconScale = Instance.new("UIScale")
+		iconScale.Scale = 0.55
+		iconScale.Parent = icon
+		local name = Instance.new("TextLabel")
+		name.Text = tab.name
+		name.BackgroundTransparency = 1
+		name.Position = UDim2.fromOffset(13 + ICON_SIZE + 11, 0)
+		name.Size = UDim2.new(1, -(13 + ICON_SIZE + 11) - 10, 1, 0)
+		name.Font = F_LABEL
+		name.TextSize = 15
+		name.TextColor3 = TEXT_DIM
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextYAlignment = Enum.TextYAlignment.Center
+		name.TextTransparency = 1
+		name.Parent = b
+		track(name)
+		sidebarLabels[#sidebarLabels + 1] = { icon = icon, name = name, scale = iconScale }
+		b.MouseEnter:Connect(function()
+			if activeTab ~= tab then tw(b, 0.15, nil, nil, { BackgroundTransparency = 0.93 }) end
+		end)
+		b.MouseLeave:Connect(function()
+			if activeTab ~= tab then tw(b, 0.2, nil, nil, { BackgroundTransparency = 1 }) end
+		end)
+		b.MouseButton1Click:Connect(function() selectTab(tab) end)
+		table.insert(tabButtons, { button = b, icon = icon, name = name, tab = tab })
+		y += ROW_H + ROW_GAP
+	end
+	tabIndicator = Instance.new("Frame")
+	tabIndicator.BackgroundColor3 = APPLE_GREEN
+	tabIndicator.BackgroundTransparency = 0.75
+	tabIndicator.Size = UDim2.fromOffset(3, 20)
+	tabIndicator.BorderSizePixel = 0
+	tabIndicator.Position = UDim2.fromOffset(5, 12 + TAB_ROW_H / 2 - 10)
+	tabIndicator.ZIndex = 3
+	tabIndicator.Parent = side
+	local ic = Instance.new("UICorner")
+	ic.CornerRadius = UDim.new(1, 0)
+	ic.Parent = tabIndicator
+end
+local headDiv = makeDivider(fr, -(WIN_W - 1))
+headDiv.Position = UDim2.fromOffset(1, TOP_H - 1)
+headDiv.Size = UDim2.fromOffset(WIN_W - 1, 1)
+headDiv.BackgroundTransparency = 1
+tw(headDiv, 0.3, nil, nil, { BackgroundTransparency = 0.94 })
+selectTab(TABS[1])
+tw(fscale, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out, { Scale = 1 })
+tw(fr, 0.3, nil, nil, { BackgroundTransparency = 0.02 })
+tw(stroke, 0.3, nil, nil, { Transparency = 0.88 })
+task.delay(0.05, function()
+	if not alive() then return end
+	tw(title, 0.3, nil, nil, { TextTransparency = 0 })
+	tw(side, 0.35, nil, nil, { BackgroundTransparency = 0.96 })
+	tw(headDiv, 0.3, nil, nil, { BackgroundTransparency = 0.92 })
+	for i, pair in ipairs(sidebarLabels) do
+		task.delay(i * 0.05, function()
+			if not alive() then return end
+			if pair.scale then
+				tw(pair.scale, 0.42, Enum.EasingStyle.Back, Enum.EasingDirection.Out, { Scale = 1 })
+			end
+			tw(pair.name, 0.28, nil, nil, { TextTransparency = 0 })
+		end)
+	end
+end)
+local FULL_H, MIN_H = WIN_H, TOP_H
+local minimized = false
+bMin.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	icoMin.Visible = not minimized
+	icoMinPlus.Visible = minimized
+	tw(fr, 0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out, {
+		Size = UDim2.fromOffset(WIN_W, minimized and MIN_H or FULL_H),
+	})
+	local targetT = minimized and 1 or 0
+	for _, o in ipairs(animatables) do
+		if o:IsA("TextLabel") or o:IsA("TextButton") then
+			tw(o, minimized and 0.15 or 0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, {
+				TextTransparency = targetT,
+			})
+		else
+			tw(o, 0.2, nil, nil, {
+				BackgroundTransparency = minimized and 1 or (o:GetAttribute("OrigTrans") or 0.92),
+			})
+		end
+	end
+	headDiv.BackgroundTransparency = minimized and 1 or 0.94
+	side.BackgroundTransparency = minimized and 1 or 0.96
+	sideEdge.BackgroundTransparency = minimized and 1 or 0.9
+	tw(title, 0.26, nil, nil, { TextTransparency = 0 })
+	for _, pair in ipairs(sidebarLabels) do
+		if pair.scale then
+			tw(pair.scale, 0.26, Enum.EasingStyle.Back, Enum.EasingDirection.Out, {
+				Scale = minimized and 0 or 1,
+			})
+		end
+	end
+	for _, close in ipairs(openDropdowns) do
+		pcall(close)
+	end
+end)
+bClose.MouseButton1Click:Connect(function()
+	local done = false
+	local function kill()
+		if done or not alive() then return end
+		done = true
+		getgenv().YangAutoId += 1
+		pcall(function() RollRuneEvent:FireServer(nil) end)
+		gui:Destroy()
+	end
+	tw(fscale, 0.22, Enum.EasingStyle.Back, Enum.EasingDirection.In, { Scale = 0.85 }).Completed:Connect(kill)
+	tw(fr, 0.22, nil, nil, { BackgroundTransparency = 1 })
+	for _, o in ipairs(animatables) do
+		if o:IsA("TextLabel") or o:IsA("TextButton") then
+			tw(o, 0.18, nil, nil, { TextTransparency = 1 })
+		end
+	end
+end)
+local dragging, dragOff = false, Vector2.new()
+titleBar.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then
+		for _, close in ipairs(openDropdowns) do
+			pcall(close)
+		end
+		dragging = true
+		dragOff = Vector2.new(i.Position.X, i.Position.Y) - Vector2.new(fr.AbsolutePosition.X, fr.AbsolutePosition.Y)
+	end
+end)
+UIS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+UIS.InputChanged:Connect(function(i)
+	if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+		local p = Vector2.new(i.Position.X, i.Position.Y) - dragOff
+		fr.Position = UDim2.fromOffset(math.clamp(p.X, -WIN_W + 70, 3000), math.clamp(p.Y, 0, 1200))
+	end
+end)
+local function vacuum(center)
+	local n = 0
+	for _, b in ipairs(bases()) do
+		if (center - b).Magnitude <= MAGNET_RANGE then
+			CollectYang:FireServer(b)
+			n += 1
+			task.wait(0.03)
+		end
+	end
+	return n
+end
+local ROLL_MAX = ROLL_MODE == "MAX"
+local function buyList(list)
+	local n = 0
+	for _, name in ipairs(list) do
+		local ok, res = pcall(UpgradeRequest.InvokeServer, UpgradeRequest, name, ROLL_MAX)
+		if ok and res then n += 1 end
+		task.wait(0.04)
+	end
+	return n
+end
+local function buyTreeList(list)
+	local n = 0
+	for _, name in ipairs(list) do
+		local ok, res = pcall(UpgradeTreeRequest.InvokeServer, UpgradeTreeRequest, name, false)
+		if ok and res then n += 1 end
+		task.wait(0.04)
+	end
+	return n
+end
+local function buyStat(costStat, list)
+	local up = LP:FindFirstChild("Upgrades")
+	if not up then return 0 end
+	local n = 0
+	for _, name in ipairs(list) do
+		local cfg = UpgradeConfig.Upgrades[name]
+		local lvl = up:FindFirstChild(name)
+		if cfg and lvl then
+			local maxLvl = tonumber(cfg.MaxLevel)
+			if not maxLvl or (tonumber(lvl.Value) or 0) < maxLvl then
+				local ok, res = pcall(UpgradeRequest.InvokeServer, UpgradeRequest, name, ROLL_MAX)
+				if ok and res then n += 1 end
+			end
+		end
+		task.wait(0.05)
+	end
+	return n
+end
+local function buyTokens()
+	local ut = LP:FindFirstChild("UpgradesToken")
+	if not ut then return 0 end
+	local n = 0
+	for key, cfg in pairs(TokenUpgradeConfig.Upgrades or {}) do
+		local lvl = ut:FindFirstChild(key)
+		if lvl and cfg then
+			local maxLvl = tonumber(cfg.MaxLevel)
+			if not maxLvl or (tonumber(lvl.Value) or 0) < maxLvl then
+				local ok, res = pcall(TokenUpgradeRequest.InvokeServer, TokenUpgradeRequest, key)
+				if ok and res then n += 1 end
+			end
+		end
+		task.wait(0.05)
+	end
+	return n
+end
+local function buyBestRod()
+	local rods = LP:FindFirstChild("Rods")
+	if not rods then return end
+	local function owned(name)
+		local f = rods:FindFirstChild(name)
+		return f ~= nil and f.Value == true
+	end
+	local best, bestScore = nil, -1
+	for _, name in ipairs(RodsData.Order or {}) do
+		local rod = RodsData.Rods[name]
+		if rod then
+			local have = owned(name)
+			if not have then
+				local okBuy, buyable = pcall(RodsData.IsCoinBuyable, name)
+				if okBuy and buyable then
+					pcall(function() BuyRodEvent:FireServer(name) end)
+					for _ = 1, 8 do
+						task.wait(0.12)
+						have = owned(name)
+						if have then break end
+					end
+				end
+			end
+			if have then
+				local score = (tonumber(rod.LuckMult) or 1) * (tonumber(rod.SpeedMult) or 1)
+				if score > bestScore then
+					bestScore, best = score, name
+				end
+			end
+		end
+	end
+	if not best then return end
+	local eq = rods:FindFirstChild("Equiped")
+	if eq and tostring(eq.Value) == best then return best end
+	pcall(function() EquipRodEvent:FireServer(best) end)
+	for _ = 1, 5 do
+		task.wait(0.12)
+		local e = rods:FindFirstChild("Equiped")
+		if e and tostring(e.Value) == best then break end
+		pcall(function() EquipRodEvent:FireServer(best) end)
+	end
+	return best
+end
+local function statAmount(statName)
+	local stats = LP:FindFirstChild("StatsFolder")
+	local v = stats and stats:FindFirstChild(statName)
+	if not v then
+		local ty = LP:FindFirstChild("Tycoon")
+		v = ty and ty:FindFirstChild(statName)
+	end
+	if not v then return 0 end
+	return tonumber(OmegaNum.toNumber(OmegaNum.toOmega(v.Value))) or 0
+end
+local function buyTycoonUpgraders()
+	local ty = LP:FindFirstChild("Tycoon")
+	local h = hrp()
+	if not ty or not h then return false end
+	local cash = statAmount(TycoonConfig.CostStat)
+	if cash <= 0 then return false end
+	local world = WS:FindFirstChild("Tycoon")
+	if not world then return false end
+	for _, u in ipairs(TycoonConfig.Upgraders or {}) do
+		local flag = ty:FindFirstChild(u.Name)
+		local owned = flag ~= nil and flag.Value == true
+		local cost = tonumber(u.Cost) or 0
+		if not owned and cost > 0 and cash >= cost then
+			local model = world:FindFirstChild(u.Button)
+			local hb = model and model:FindFirstChild("Hitbox", true)
+			local root = hrp()
+			if hb and root then
+				local back = root.CFrame
+				root.CFrame = hb.CFrame * CFrame.new(0, 3, 0)
+				task.wait(0.4)
+				local now = hrp()
+				if now then now.CFrame = back end
+				return true
+			end
+		end
+	end
+	return false
+end
+local function loop(fn, delay)
+	task.spawn(function()
+		while alive() do
+			local ok, acted = pcall(fn)
+			if ok and acted then
+				task.wait(delay)
+			else
+				task.wait(0.05)
+			end
+		end
+	end)
+end
+loop(function()
+	if not S.cultivate then return false end
+	pcall(function() Cultivate:FireServer(true) end)
+	return true
+end, DELAY.cultivate)
+loop(function()
+	if not S.magnet then return false end
+	local h = hrp()
+	if not h then return false end
+	vacuum(h.Position)
+	return true
+end, 0.05)
+loop(function()
+	if not S.yangUp then return false end
+	buyList(YANG_UPGRADES)
+	buyTreeList(YANG_TREE)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.yinUp then return false end
+	buyList(YIN_UPGRADES)
+	buyTreeList(YIN_TREE)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.autoRune then return false end
+	local pool = selectedRune
+	if (pool == "YinRune" or pool == "YangRune") and not YinYangSchedule.IsOpen(pool) then
+		return false
+	end
+	pcall(function() RollRuneEvent:FireServer(pool) end)
+	return true
+end, DELAY.rune)
+loop(function()
+	if not S.autoFish then return false end
+	pcall(function() FishCatchEvent:FireServer() end)
+	return true
+end, DELAY.fish)
+loop(function()
+	if not S.autoSell then return false end
+	pcall(function() SellFishEvent:FireServer("all") end)
+	return true
+end, DELAY.sell)
+loop(function()
+	if not S.autoMerge then return false end
+	pcall(function() MergeEvent:FireServer() end)
+	return true
+end, DELAY.merge)
+loop(function()
+	if not S.autoBottle then return false end
+	pcall(function() BottleClickEvent:FireServer() end)
+	return true
+end, DELAY.bottle)
+loop(function()
+	if not S.upCoins then return false end
+	buyStat("Coins", COINS_UP)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.upTycoonCash then return false end
+	buyStat("Cash", CASH_UP)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.upTycoonLevel then return false end
+	buyStat("LevelPoints", LEVEL_UP)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.autoTycoonColor then return false end
+	local ty = LP:FindFirstChild("Tycoon")
+	local color = ty and ty:FindFirstChild("Color")
+	if color and tonumber(color.Value) == 10 then return false end
+	local h = hrp()
+	if not h then return false end
+	local tc = WS:FindFirstChild("TycoonColor")
+	local btn = tc and tc:FindFirstChild("Button")
+	local b1 = btn and btn:FindFirstChild("Button1")
+	if not b1 then return false end
+	if (h.Position - b1.Position).Magnitude > 8 then
+		h.CFrame = b1.CFrame * CFrame.new(0, 4, 0)
+	end
+	return true
+end, DELAY.tycoon)
+loop(function()
+	if not S.upBottles then return false end
+	buyStat("Bottles", BOTTLES_UP)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.upBones then return false end
+	buyStat("Fishbones", BONES_UP)
+	return true
+end, DELAY.upgrade)
+loop(function()
+	if not S.upTokens then return false end
+	buyTokens()
+	return true
+end, DELAY.token)
+loop(function()
+	if not S.autoCoinTier then return false end
+	pcall(function() TierRequest:InvokeServer() end)
+	return true
+end, DELAY.tier)
+loop(function()
+	if not S.autoBottleTier then return false end
+	pcall(function() BottleTierRequest:InvokeServer() end)
+	return true
+end, DELAY.tier)
+loop(function()
+	if not S.autoRank then return false end
+	local resets = LP:FindFirstChild("Resets")
+	local rank = resets and resets:FindFirstChild("FisherRank")
+	if rank then
+		pcall(function() FisherRankRequest:InvokeServer((tonumber(rank.Value) or 0) + 1) end)
+	end
+	return true
+end, DELAY.rank)
+loop(function()
+	if not S.autoRods then return false end
+	buyBestRod()
+	return true
+end, DELAY.rod)
+loop(function()
+	if not S.autoReborn then return false end
+	if statAmount(RebornConfig.CostStat) < (tonumber(RebornConfig.Cost) or math.huge) then return false end
+	pcall(function() RebornRequest:InvokeServer() end)
+	return true
+end, DELAY.reborn)
+loop(function()
+	if not S.autoTycoonUp then return false end
+	return buyTycoonUpgraders()
+end, DELAY.tycoon)
+loop(function()
+	if not S.autoRebirth then return false end
+	local resets = LP:FindFirstChild("Resets")
+	local rb = resets and resets:FindFirstChild("Rebirth")
+	if not rb then return false end
+	if (tonumber(rb.Value) or 0) >= (tonumber(RebirthConfig.MaxRebirth) or 0) then return false end
+	if statAmount(RebirthConfig.CostStat) < (tonumber(RebirthConfig.Cost) or math.huge) then return false end
+	pcall(function() RebirthRequest:InvokeServer() end)
+	return true
+end, DELAY.rebirth)
+local function antiAfkTick()
+	pcall(function()
+		VU:CaptureController()
+		VU:ClickButton2(Vector2.new())
+	end)
+	local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+	if hum then pcall(function() hum:Jump() end) end
+end
+LP.Idled:Connect(function()
+	if S.antiAfk then antiAfkTick() end
+end)
+task.spawn(function()
+	while alive() do
+		for _ = 1, 36 do
+			if not alive() then return end
+			task.wait(5)
+		end
+		if S.antiAfk then antiAfkTick() end
+	end
+end)
+UIS.JumpRequest:Connect(function()
+	if not S.infJump then return end
+	local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+	if hum then pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end) end
+end)
+RunService.Stepped:Connect(function()
+	if not S.noclip then return end
+	local c = LP.Character
+	if not c then return end
+	for _, p in ipairs(c:GetDescendants()) do
+		if p:IsA("BasePart") then p.CanCollide = false end
+	end
+end)
+LP.CharacterAdded:Connect(function(char)
+	task.wait(0.4)
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.WalkSpeed = S.walkSpeed
+		hum.UseJumpPower = true
+		hum.JumpPower = S.jumpPower
+	end
+end)
+task.spawn(function()
+	local frames, last = 0, os.clock()
+	while alive() do
+		RunService.Heartbeat:Wait()
+		frames += 1
+		local now = os.clock()
+		if now - last >= 0.5 then
+			if lblFps and lblFps.Parent then
+				lblFps.Text = string.format("FPS  %d", math.floor(frames / (now - last)))
+			end
+			frames, last = 0, now
+		end
+	end
+end)
+saveConfig = function()
+	if not autoSaveOn then return end
+	local toggles = {}
+	for _, t in ipairs(ALL_TOGGLES) do
+		local key = TOGGLE_KEY_BY_TEXT[t.text]
+		if key then toggles[key] = S[key] == true end
+	end
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode({
+			version = 1,
+			autoSave = true,
+			toggles = toggles,
+			rune = selectedRune,
+			walkSpeed = S.walkSpeed,
+			jumpPower = S.jumpPower,
+		})
+	end)
+	if ok and writefile then
+		pcall(writefile, CONFIG_PATH, encoded)
+	end
+end
+markDirty = function()
+	if autoSaveOn then saveConfig() end
+end
+local saved = loadConfig()
+for _, t in ipairs(ALL_TOGGLES) do
+	local key = TOGGLE_KEY_BY_TEXT[t.text]
+	if key then t.apply(S[key] == true, false) end
+end
+local autoSaveToggle
+for _, t in ipairs(ALL_TOGGLES) do
+	if t.text == "Auto Save" then autoSaveToggle = t end
+end
+if saved and saved.autoSave == true then
+	autoSaveOn = true
+	if autoSaveToggle then autoSaveToggle.apply(true, false) end
+	if type(saved.toggles) == "table" then
+		for _, t in ipairs(ALL_TOGGLES) do
+			local key = TOGGLE_KEY_BY_TEXT[t.text]
+			if key and saved.toggles[key] ~= nil then
+				S[key] = saved.toggles[key] == true
+				t.apply(S[key], false)
+			end
+		end
+		if saved.toggles.autoTycoonPerks == true then
+			S.upTycoonCash, S.upTycoonLevel = true, true
+			for _, t in ipairs(ALL_TOGGLES) do
+				local key = TOGGLE_KEY_BY_TEXT[t.text]
+				if key == "upTycoonCash" or key == "upTycoonLevel" then t.apply(true, false) end
+			end
+		end
+	end
+	if type(saved.rune) == "string" then
+		selectedRune = saved.rune
+		if ddRune then ddRune.set(saved.rune) end
+	end
+	if type(saved.walkSpeed) == "number" then S.walkSpeed = saved.walkSpeed end
+	if type(saved.jumpPower) == "number" then S.jumpPower = saved.jumpPower end
+	if lblSpeed then lblSpeed.Text = string.format("WalkSpeed  %d", S.walkSpeed) end
+	if lblJump then lblJump.Text = string.format("JumpPower  %d", S.jumpPower) end
+	lblStat.Text = "Settings restored from your last session."
+	lblStat.TextColor3 = APPLE_GREEN
+	pcall(function() RollRuneEvent:FireServer(nil) end)
+end
+applySpeed()
+applyJump()
+refreshRuneList()
+queueAutoExec(S.autoExec ~= false)
